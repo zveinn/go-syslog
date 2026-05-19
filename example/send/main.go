@@ -10,7 +10,7 @@ import (
 	"net"
 	"time"
 
-	syslog "github.com/sveinn/go-syslog"
+	syslog "github.com/zveinn/go-syslog"
 )
 
 func main() {
