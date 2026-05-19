@@ -1259,6 +1259,75 @@ func BenchmarkFormatRFC3164(b *testing.B) {
 	}
 }
 
+// benchMsg is a realistically-shaped formatted RFC 5424 message; used to
+// drive the framing benchmarks below.
+var benchMsg = []byte(
+	`<165>1 2026-10-11T22:14:15.003Z mymachine.example.com myapp 1234 ID47 - hello world`,
+)
+
+func BenchmarkFrameRFC6587_AddLog(b *testing.B) {
+	// Measure steady-state AddLog cost. The frame grows once at the start
+	// then we Reset every ~1 MiB so the bench reflects per-message work,
+	// not append-grow amortisation.
+	f := NewFrameRFC6587()
+	b.ReportAllocs()
+	b.SetBytes(int64(len(benchMsg)))
+	for b.Loop() {
+		if err := f.AddLog(benchMsg); err != nil {
+			b.Fatal(err)
+		}
+		if f.Size() > 1<<20 {
+			f.Reset()
+		}
+	}
+}
+
+func BenchmarkFrameRFC6587NonTransparent_AddLog(b *testing.B) {
+	f := NewFrameRFC6587NonTransparent('\n')
+	b.ReportAllocs()
+	b.SetBytes(int64(len(benchMsg)))
+	for b.Loop() {
+		if err := f.AddLog(benchMsg); err != nil {
+			b.Fatal(err)
+		}
+		if f.Size() > 1<<20 {
+			f.Reset()
+		}
+	}
+}
+
+// BenchmarkPipelineRFC5424_Octet measures a realistic hot path: append one
+// 5424 message into a reused buffer, then add it to an octet-counted frame.
+func BenchmarkPipelineRFC5424_Octet(b *testing.B) {
+	m := &Message{
+		Facility:  FacLocal4,
+		Severity:  SevNotice,
+		Timestamp: time.Date(2026, time.October, 11, 22, 14, 15, 3000000, time.UTC),
+		Hostname:  "mymachine.example.com",
+		AppName:   "myapp",
+		ProcID:    "1234",
+		MsgID:     "ID47",
+		Message:   "user login succeeded for alice from 192.0.2.7",
+	}
+	buf := make([]byte, 0, 256)
+	f := NewFrameRFC6587()
+	b.ReportAllocs()
+	for b.Loop() {
+		buf = buf[:0]
+		var err error
+		buf, err = AppendRFC5424(buf, m)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if err := f.AddLog(buf); err != nil {
+			b.Fatal(err)
+		}
+		if f.Size() > 1<<20 {
+			f.Reset()
+		}
+	}
+}
+
 // -----------------------------------------------------------------------------
 // End-to-end
 // -----------------------------------------------------------------------------

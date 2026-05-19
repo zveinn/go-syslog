@@ -1,6 +1,6 @@
 # syslog
 
-A Go package for building syslog messages. Hand it a message struct, get bytes back. Pick the RFC, wrap for TCP if you want, write to the network.
+This is a package to format syslog messages based on standard RFCs.
 
 ## Supported RFCs
 
@@ -45,9 +45,9 @@ conn.Write(f.Bytes())
 ## Performance
 
 ```
-BenchmarkAppendRFC3164     74 ns/op      0 B/op    0 allocs/op
-BenchmarkAppendRFC5424    281 ns/op      0 B/op    0 allocs/op
-BenchmarkFormatRFC3164    111 ns/op    112 B/op    1 allocs/op
+BenchmarkAppendRFC3164                         74 ns/op      0 B/op    0 allocs/op
+BenchmarkAppendRFC5424                        285 ns/op      0 B/op    0 allocs/op
+BenchmarkFormatRFC3164                        108 ns/op    112 B/op    1 allocs/op
+BenchmarkFrameRFC6587_AddLog                    9 ns/op      0 B/op    0 allocs/op
+BenchmarkFrameRFC6587NonTransparent_AddLog      8 ns/op      0 B/op    0 allocs/op
 ```
-
-Ryzen 7 7840HS, Go 1.26.
