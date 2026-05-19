@@ -42,12 +42,33 @@ f.AddLog(msg2)
 conn.Write(f.Bytes())
 ```
 
+Or use the non transparent variant. Pick a trailer byte (LF is the default per the RFC). Your messages must not contain that byte:
+
+```go
+f := syslog.NewFrameRFC6587NonTransparent('\n')
+f.AddLog(msg1)
+f.AddLog(msg2)
+conn.Write(f.Bytes())
+```
+
 ## Performance
 
 ```
-BenchmarkAppendRFC3164                         74 ns/op      0 B/op    0 allocs/op
-BenchmarkAppendRFC5424                        285 ns/op      0 B/op    0 allocs/op
-BenchmarkFormatRFC3164                        108 ns/op    112 B/op    1 allocs/op
-BenchmarkFrameRFC6587_AddLog                    9 ns/op      0 B/op    0 allocs/op
-BenchmarkFrameRFC6587NonTransparent_AddLog      8 ns/op      0 B/op    0 allocs/op
+BenchmarkNewPriority                              1.3 ns/op     0 B/op  0 allocs/op
+BenchmarkPriority_Facility                        0.4 ns/op     0 B/op  0 allocs/op
+BenchmarkPriority_Severity                        0.4 ns/op     0 B/op  0 allocs/op
+BenchmarkAppendRFC3164                             74 ns/op     0 B/op  0 allocs/op
+BenchmarkAppendRFC5424                            285 ns/op     0 B/op  0 allocs/op
+BenchmarkFormatRFC3164                            109 ns/op   112 B/op  1 allocs/op
+BenchmarkFormatRFC5424                            375 ns/op   224 B/op  1 allocs/op
+BenchmarkNewFrameRFC6587                           18 ns/op    24 B/op  1 allocs/op
+BenchmarkFrameRFC6587_AddLog                      8.9 ns/op     0 B/op  0 allocs/op
+BenchmarkFrameRFC6587_Size                        0.4 ns/op     0 B/op  0 allocs/op
+BenchmarkFrameRFC6587_Bytes                       0.8 ns/op     0 B/op  0 allocs/op
+BenchmarkFrameRFC6587_Reset                       0.5 ns/op     0 B/op  0 allocs/op
+BenchmarkNewFrameRFC6587NonTransparent             20 ns/op    32 B/op  1 allocs/op
+BenchmarkFrameRFC6587NonTransparent_AddLog        7.7 ns/op     0 B/op  0 allocs/op
+BenchmarkFrameRFC6587NonTransparent_Size          0.4 ns/op     0 B/op  0 allocs/op
+BenchmarkFrameRFC6587NonTransparent_Bytes         0.9 ns/op     0 B/op  0 allocs/op
+BenchmarkFrameRFC6587NonTransparent_Reset         0.6 ns/op     0 B/op  0 allocs/op
 ```

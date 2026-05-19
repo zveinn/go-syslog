@@ -1181,11 +1181,43 @@ func FuzzAppendRFC5424(f *testing.F) {
 }
 
 // -----------------------------------------------------------------------------
-// Allocation benchmarks
+// Benchmarks
 //
-// AppendRFC3164 / AppendRFC5424 are expected to be zero-alloc per call once
-// the destination buffer has grown to fit the largest message.
+// One per exported function / method. The Append* family is zero-alloc with
+// a reused buffer; the Format* convenience wrappers cost one allocation (the
+// returned slice). Frame AddLog is zero-alloc in steady state once the
+// internal buffer has grown; the rest of the Frame surface (Size, Bytes,
+// Reset) is essentially free.
 // -----------------------------------------------------------------------------
+
+func BenchmarkNewPriority(b *testing.B) {
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, err := NewPriority(FacLocal4, SevNotice); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkPriority_Facility(b *testing.B) {
+	p := Priority(165)
+	var sink Facility
+	b.ReportAllocs()
+	for b.Loop() {
+		sink = p.Facility()
+	}
+	_ = sink
+}
+
+func BenchmarkPriority_Severity(b *testing.B) {
+	p := Priority(165)
+	var sink Severity
+	b.ReportAllocs()
+	for b.Loop() {
+		sink = p.Severity()
+	}
+	_ = sink
+}
 
 func BenchmarkAppendRFC3164(b *testing.B) {
 	m := &Message{
@@ -1259,11 +1291,52 @@ func BenchmarkFormatRFC3164(b *testing.B) {
 	}
 }
 
+func BenchmarkFormatRFC5424(b *testing.B) {
+	m := &Message{
+		Facility:  FacLocal4,
+		Severity:  SevNotice,
+		Timestamp: time.Date(2026, time.October, 11, 22, 14, 15, 3000000, time.UTC),
+		Hostname:  "mymachine.example.com",
+		AppName:   "myapp",
+		ProcID:    "1234",
+		MsgID:     "ID47",
+		StructuredData: []SDElement{{
+			ID: "exampleSDID@32473",
+			Params: []SDParam{
+				{Name: "iut", Value: "3"},
+				{Name: "eventSource", Value: "Application"},
+				{Name: "eventID", Value: "1011"},
+			},
+		}},
+		Message: "user login succeeded for alice from 192.0.2.7",
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		if _, err := FormatRFC5424(m); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 // benchMsg is a realistically-shaped formatted RFC 5424 message; used to
 // drive the framing benchmarks below.
 var benchMsg = []byte(
 	`<165>1 2026-10-11T22:14:15.003Z mymachine.example.com myapp 1234 ID47 - hello world`,
 )
+
+// newFrameSink forces the constructor's result to escape so the bench
+// reflects a heap allocation, which is what a real caller incurs.
+var (
+	newFrameSink   *FrameRFC6587
+	newFrameNTSink *FrameRFC6587NonTransparent
+)
+
+func BenchmarkNewFrameRFC6587(b *testing.B) {
+	b.ReportAllocs()
+	for b.Loop() {
+		newFrameSink = NewFrameRFC6587()
+	}
+}
 
 func BenchmarkFrameRFC6587_AddLog(b *testing.B) {
 	// Measure steady-state AddLog cost. The frame grows once at the start
@@ -1282,6 +1355,44 @@ func BenchmarkFrameRFC6587_AddLog(b *testing.B) {
 	}
 }
 
+func BenchmarkFrameRFC6587_Size(b *testing.B) {
+	f := NewFrameRFC6587()
+	_ = f.AddLog(benchMsg)
+	var sink int
+	b.ReportAllocs()
+	for b.Loop() {
+		sink = f.Size()
+	}
+	_ = sink
+}
+
+func BenchmarkFrameRFC6587_Bytes(b *testing.B) {
+	f := NewFrameRFC6587()
+	_ = f.AddLog(benchMsg)
+	var sink []byte
+	b.ReportAllocs()
+	for b.Loop() {
+		sink = f.Bytes()
+	}
+	_ = sink
+}
+
+func BenchmarkFrameRFC6587_Reset(b *testing.B) {
+	f := NewFrameRFC6587()
+	_ = f.AddLog(benchMsg) // populate once so Reset has something to do on the first call
+	b.ReportAllocs()
+	for b.Loop() {
+		f.Reset()
+	}
+}
+
+func BenchmarkNewFrameRFC6587NonTransparent(b *testing.B) {
+	b.ReportAllocs()
+	for b.Loop() {
+		newFrameNTSink = NewFrameRFC6587NonTransparent('\n')
+	}
+}
+
 func BenchmarkFrameRFC6587NonTransparent_AddLog(b *testing.B) {
 	f := NewFrameRFC6587NonTransparent('\n')
 	b.ReportAllocs()
@@ -1293,6 +1404,37 @@ func BenchmarkFrameRFC6587NonTransparent_AddLog(b *testing.B) {
 		if f.Size() > 1<<20 {
 			f.Reset()
 		}
+	}
+}
+
+func BenchmarkFrameRFC6587NonTransparent_Size(b *testing.B) {
+	f := NewFrameRFC6587NonTransparent('\n')
+	_ = f.AddLog(benchMsg)
+	var sink int
+	b.ReportAllocs()
+	for b.Loop() {
+		sink = f.Size()
+	}
+	_ = sink
+}
+
+func BenchmarkFrameRFC6587NonTransparent_Bytes(b *testing.B) {
+	f := NewFrameRFC6587NonTransparent('\n')
+	_ = f.AddLog(benchMsg)
+	var sink []byte
+	b.ReportAllocs()
+	for b.Loop() {
+		sink = f.Bytes()
+	}
+	_ = sink
+}
+
+func BenchmarkFrameRFC6587NonTransparent_Reset(b *testing.B) {
+	f := NewFrameRFC6587NonTransparent('\n')
+	_ = f.AddLog(benchMsg)
+	b.ReportAllocs()
+	for b.Loop() {
+		f.Reset()
 	}
 }
 
