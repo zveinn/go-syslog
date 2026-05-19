@@ -25,7 +25,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/sveinn/syslog"
+	syslog "github.com/sveinn/go-syslog"
 )
 
 const bulkPerCategory = 8000
