@@ -30,6 +30,17 @@ import (
 
 const bulkPerCategory = 8000
 
+// largePerCategory generates ~10 KB messages over TCP only — far above any
+// UDP MTU. Four categories (3164/5424 × octet/non-transparent) × this count
+// = 10k large messages, on top of the smaller bulk corpus. Verifies the
+// TCP framing layer handles realistic large payloads (RFC 3164 over TCP
+// has no 1024-octet cap; RFC 5424 has no transport-imposed cap at all).
+const largePerCategory = 2500
+
+// largeBodyBytes targets ~10 KB per body. Stays well under rsyslog's 32k
+// maxMessageSize so nothing gets truncated server-side.
+const largeBodyBytes = 10_000
+
 func main() {
 	udpAddr := flag.String("udp", "127.0.0.1:5514", "UDP target host:port")
 	tcpAddr := flag.String("tcp", "127.0.0.1:5514", "TCP target host:port")
@@ -82,9 +93,11 @@ func main() {
 	defer tcpNT.Close()
 
 	var (
-		nUDP3164, nUDP5424                 int
-		nTCPOctet3164, nTCPOctet5424       int
+		nUDP3164, nUDP5424                   int
+		nTCPOctet3164, nTCPOctet5424         int
 		nTCPNonTransp3164, nTCPNonTransp5424 int
+		nLargeOctet3164, nLargeOctet5424     int
+		nLargeNT3164, nLargeNT5424           int
 	)
 
 	// ---- UDP ------------------------------------------------------------
@@ -120,12 +133,45 @@ func main() {
 		bulk5424(bulkPerCategory, "5424-tcp-nt"),
 		syslog.AppendRFC5424)
 
-	total := nUDP3164 + nUDP5424 + nTCPOctet3164 + nTCPOctet5424 + nTCPNonTransp3164 + nTCPNonTransp5424
+	// ---- Large payloads over TCP (~10 KB each) -------------------------
+	// Stress-tests both framings with messages well above any UDP MTU. Also
+	// validates that RFC 3164 over TCP correctly carries >1024-octet packets
+	// (the §4.1 cap is UDP-only and no longer enforced by the formatter).
+	nLargeOctet3164 = sendTCPOctet(tcpOctet, expectF,
+		nil,
+		bulkLarge3164(largePerCategory, "3164-tcp-octet-large"),
+		syslog.AppendRFC3164)
+
+	nLargeOctet5424 = sendTCPOctet(tcpOctet, expectF,
+		nil,
+		bulkLarge5424(largePerCategory, "5424-tcp-octet-large"),
+		syslog.AppendRFC5424)
+
+	nLargeNT3164 = sendTCPNonTransp(tcpNT, expectF,
+		nil,
+		bulkLarge3164(largePerCategory, "3164-tcp-nt-large"),
+		syslog.AppendRFC3164)
+
+	nLargeNT5424 = sendTCPNonTransp(tcpNT, expectF,
+		nil,
+		bulkLarge5424(largePerCategory, "5424-tcp-nt-large"),
+		syslog.AppendRFC5424)
+
+	total := nUDP3164 + nUDP5424 +
+		nTCPOctet3164 + nTCPOctet5424 +
+		nTCPNonTransp3164 + nTCPNonTransp5424 +
+		nLargeOctet3164 + nLargeOctet5424 +
+		nLargeNT3164 + nLargeNT5424
 	log.Printf(
-		"sent: 3164/UDP=%d  5424/UDP=%d  3164/TCP-octet=%d  5424/TCP-octet=%d  3164/TCP-nt=%d  5424/TCP-nt=%d  total=%d",
+		"sent: 3164/UDP=%d  5424/UDP=%d  3164/TCP-octet=%d  5424/TCP-octet=%d  "+
+			"3164/TCP-nt=%d  5424/TCP-nt=%d  "+
+			"3164/TCP-octet-large=%d  5424/TCP-octet-large=%d  "+
+			"3164/TCP-nt-large=%d  5424/TCP-nt-large=%d  total=%d",
 		nUDP3164, nUDP5424,
 		nTCPOctet3164, nTCPOctet5424,
 		nTCPNonTransp3164, nTCPNonTransp5424,
+		nLargeOctet3164, nLargeOctet5424,
+		nLargeNT3164, nLargeNT5424,
 		total,
 	)
 
@@ -633,6 +679,27 @@ func tabAndSymbolsBody(seq int, transport string) string {
 		seq, transport)
 }
 
+// largeBody returns a deterministic printable-ASCII body of approximately
+// sz bytes. The leading "seq=N cat=T " identifies the message; the trailing
+// "end=seq=N" pins the tail so a truncation in transit fails the byte-exact
+// diff. LF is excluded so non-transparent framing stays well-formed.
+func largeBody(seq int, transport string, sz int) string {
+	prefix := fmt.Sprintf("seq=%d cat=%s large beg=%d ", seq, transport, seq)
+	suffix := fmt.Sprintf(" end=seq=%d", seq)
+	fillerLen := max(sz-len(prefix)-len(suffix), 0)
+	r := rand.New(rand.NewPCG(uint64(seq), 0xC0FFEEFEEDFACE01))
+	filler := make([]byte, fillerLen)
+	for i := range filler {
+		filler[i] = byte(r.IntN(95) + 32) // 32..126
+	}
+	var b strings.Builder
+	b.Grow(len(prefix) + fillerLen + len(suffix))
+	b.WriteString(prefix)
+	b.Write(filler)
+	b.WriteString(suffix)
+	return b.String()
+}
+
 // -----------------------------------------------------------------------------
 // Bulk generators
 // -----------------------------------------------------------------------------
@@ -874,6 +941,51 @@ func bulk5424(n int, transport string) []*syslog.Message {
 			MsgID:          msgID,
 			StructuredData: sd,
 			Message:        body,
+		})
+	}
+	return out
+}
+
+// -----------------------------------------------------------------------------
+// Large-payload bulk generators (TCP only)
+// -----------------------------------------------------------------------------
+
+// bulkLarge3164 returns n RFC 3164 messages with ~10 KB bodies. Intended
+// for TCP only — RFC 3164 itself is UDP-scoped and the 1024-octet packet
+// limit doesn't apply over TCP per RFC 6587.
+func bulkLarge3164(n int, transport string) []*syslog.Message {
+	out := make([]*syslog.Message, 0, n)
+	base := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+	for seq := range n {
+		out = append(out, &syslog.Message{
+			Facility:  syslog.FacUser,
+			Severity:  syslog.SevInfo,
+			Timestamp: base.Add(time.Duration(seq) * time.Second),
+			Hostname:  hostnames3164[seq%len(hostnames3164)],
+			AppName:   tags3164[seq%len(tags3164)],
+			ProcID:    procIDs3164[seq%len(procIDs3164)],
+			Message:   largeBody(seq, transport, largeBodyBytes),
+		})
+	}
+	return out
+}
+
+// bulkLarge5424 returns n RFC 5424 messages with ~10 KB bodies. RFC 5424
+// has no transport-imposed message-size cap (§6.1 defers to the transport
+// mapping); over TCP via RFC 6587, there's no size constraint.
+func bulkLarge5424(n int, transport string) []*syslog.Message {
+	out := make([]*syslog.Message, 0, n)
+	base := time.Date(2026, time.January, 1, 0, 0, 0, 0, time.UTC)
+	for seq := range n {
+		out = append(out, &syslog.Message{
+			Facility:  syslog.FacUser,
+			Severity:  syslog.SevInfo,
+			Timestamp: base.Add(time.Duration(seq) * time.Second).In(tzCycle[seq%len(tzCycle)]),
+			Hostname:  fmt.Sprintf("host%04d.example.com", seq),
+			AppName:   "app",
+			ProcID:    fmt.Sprintf("%d", 1000+seq),
+			MsgID:     fmt.Sprintf("LARGE%05d", seq),
+			Message:   largeBody(seq, transport, largeBodyBytes),
 		})
 	}
 	return out

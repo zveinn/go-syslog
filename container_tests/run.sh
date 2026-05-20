@@ -54,7 +54,7 @@ sleep 1 # let accept loops settle
 PROFDIR="$HERE/profiles"
 mkdir -p "$PROFDIR"
 
-echo "==> Generating load (6 categories × ~8k each + corner cases)"
+echo "==> Generating load (6 categories × ~8k each + corner cases + 4 × ~2.5k large TCP)"
 START=$(date +%s)
 (cd "$ROOT" && go run ./container_tests/load \
     -expect "$TMPDIR/expected.txt" \
@@ -121,13 +121,16 @@ c_3164_udp=$(count '^\[imudp\] <[0-9]+>[A-Z][a-z][a-z] ')
 c_5424_udp=$(count '^\[imudp\] <[0-9]+>1 ')
 c_3164_tcp=$(count '^\[imtcp\] <[0-9]+>[A-Z][a-z][a-z] ')
 c_5424_tcp=$(count '^\[imtcp\] <[0-9]+>1 ')
+# Large-payload subset: cat=*-large appears in every large message body.
+c_large_tcp=$(count '^\[imtcp\] .*cat=[^ ]*-large')
 
 echo
 echo "    by category (received):"
-printf "      RFC 3164 / UDP : %6d\n" "$c_3164_udp"
-printf "      RFC 5424 / UDP : %6d\n" "$c_5424_udp"
-printf "      RFC 3164 / TCP : %6d  (octet-counting + non-transparent)\n" "$c_3164_tcp"
-printf "      RFC 5424 / TCP : %6d  (octet-counting + non-transparent)\n" "$c_5424_tcp"
+printf "      RFC 3164 / UDP        : %6d\n" "$c_3164_udp"
+printf "      RFC 5424 / UDP        : %6d\n" "$c_5424_udp"
+printf "      RFC 3164 / TCP        : %6d  (octet-counting + non-transparent)\n" "$c_3164_tcp"
+printf "      RFC 5424 / TCP        : %6d  (octet-counting + non-transparent)\n" "$c_5424_tcp"
+printf "      (of which ~10KB large): %6d  (TCP only, both framings)\n" "$c_large_tcp"
 echo
 
 fail=0
