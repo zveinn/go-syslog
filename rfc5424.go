@@ -203,16 +203,27 @@ func validateSDName(name, kind string) error {
 	return nil
 }
 
+// sdEscapeLUT[c] != 0 iff c must be escaped per RFC 5424 §6.3.3.
+var sdEscapeLUT = func() (t [256]byte) {
+	t['\\'] = 1
+	t['"'] = 1
+	t[']'] = 1
+	return
+}()
+
 // appendEscapedSDValue escapes the three RFC 5424 §6.3.3 special chars
-// (\, ", ]) and appends the result to dst. Single-pass, single allocation
-// path (just the append growth on dst).
+// (\, ", ]) and appends the result to dst.
+//
+// For values ≥64 octets, a single ContainsAny scan to confirm cleanliness
+// followed by a bulk append beats the byte loop. Below that threshold the
+// loop is cheap enough that the scan is pure overhead — benchmark-driven.
 func appendEscapedSDValue(dst []byte, v string) []byte {
-	if !strings.ContainsAny(v, `\"]`) {
+	if len(v) >= 64 && !strings.ContainsAny(v, `\"]`) {
 		return append(dst, v...)
 	}
 	for i := 0; i < len(v); i++ {
 		c := v[i]
-		if c == '\\' || c == '"' || c == ']' {
+		if sdEscapeLUT[c] != 0 {
 			dst = append(dst, '\\')
 		}
 		dst = append(dst, c)
