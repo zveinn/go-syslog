@@ -1,6 +1,11 @@
 package syslog
 
-import "fmt"
+import "errors"
+
+var (
+	errFacilityOutOfRange = errors.New("syslog: facility out of range (0-23)")
+	errSeverityOutOfRange = errors.New("syslog: severity out of range (0-7)")
+)
 
 // Facility is the syslog facility code (0-23).
 type Facility uint8
@@ -53,10 +58,10 @@ type Priority uint8
 // an error if either argument is outside its valid range.
 func NewPriority(f Facility, s Severity) (Priority, error) {
 	if f > 23 {
-		return 0, fmt.Errorf("syslog: facility %d out of range (0-23)", f)
+		return 0, errFacilityOutOfRange
 	}
 	if s > 7 {
-		return 0, fmt.Errorf("syslog: severity %d out of range (0-7)", s)
+		return 0, errSeverityOutOfRange
 	}
 	return Priority(uint8(f)*8 + uint8(s)), nil
 }
