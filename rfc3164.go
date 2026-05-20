@@ -7,9 +7,6 @@ import (
 	"time"
 )
 
-// rfc3164MaxPacket is the MUST-NOT-EXCEED packet size from RFC 3164 §4.1.
-const rfc3164MaxPacket = 1024
-
 // rfc3164TagMax is the MUST-NOT-EXCEED TAG length from RFC 3164 §4.1.3.
 const rfc3164TagMax = 32
 
@@ -17,6 +14,11 @@ const rfc3164TagMax = 32
 // equivalent to AppendRFC3164 with a single-use buffer. Callers in a hot
 // path should prefer AppendRFC3164 with a reused buffer to avoid per-call
 // allocation.
+//
+// RFC 3164 §4.1's 1024-octet packet limit is UDP-specific (the whole RFC
+// is scoped to UDP transport). It is not enforced here; callers sending
+// over UDP must check len(result) ≤ 1024 themselves. TCP (RFC 6587) and
+// TLS (RFC 5425) transports have no such limit.
 func FormatRFC3164(m *Message) ([]byte, error) {
 	// Pre-size the buffer so AppendRFC3164 doesn't need to grow it. Header
 	// (PRI + timestamp + " HOSTNAME TAG[PID]: ") is bounded; 32 bytes of
@@ -81,8 +83,6 @@ func AppendRFC3164(dst []byte, m *Message) ([]byte, error) {
 		ts = time.Now()
 	}
 
-	startLen := len(dst)
-
 	dst = append(dst, '<')
 	dst = strconv.AppendUint(dst, uint64(pri), 10)
 	dst = append(dst, '>')
@@ -120,10 +120,6 @@ func AppendRFC3164(dst []byte, m *Message) ([]byte, error) {
 	dst = append(dst, ':', ' ')
 	dst = append(dst, m.Message...)
 
-	if pktLen := len(dst) - startLen; pktLen > rfc3164MaxPacket {
-		return dst[:startLen], fmt.Errorf("syslog: RFC 3164 packet length %d exceeds %d octets",
-			pktLen, rfc3164MaxPacket)
-	}
 	return dst, nil
 }
 

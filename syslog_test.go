@@ -121,19 +121,6 @@ func TestFormatRFC3164_AcceptsAlphanumericTag(t *testing.T) {
 	}
 }
 
-func TestFormatRFC3164_PacketLimit(t *testing.T) {
-	// §4.1: total length MUST be ≤ 1024 bytes.
-	m := &Message{
-		Facility: FacUser, Severity: SevInfo,
-		Timestamp: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
-		Hostname:  "h", AppName: "app",
-		Message: strings.Repeat("x", 1024),
-	}
-	if _, err := FormatRFC3164(m); err == nil {
-		t.Error("expected packet-length error")
-	}
-}
-
 func TestFormatRFC3164_NoLeadingZeroInPRI(t *testing.T) {
 	// PRI of 0 → "<0>", not "<00>". §4.1.1.
 	m := &Message{
@@ -595,20 +582,6 @@ func TestFormatRFC3164_PreservesArbitraryBody(t *testing.T) {
 	}
 }
 
-func TestFormatRFC3164_RejectsOversizedBodies(t *testing.T) {
-	// §4.1 1024-octet limit applies to the whole packet. With a ~50-byte
-	// header, 1100 bytes of body must push us over.
-	ts := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
-	m := &Message{
-		Facility: FacUser, Severity: SevInfo, Timestamp: ts,
-		Hostname: "h", AppName: "app",
-		Message: strings.Repeat(`{"json":"payload"}`, 100),
-	}
-	if _, err := FormatRFC3164(m); err == nil {
-		t.Error("expected packet-size error for >1024-octet packet")
-	}
-}
-
 func TestFormatRFC5424_AcceptsBinaryMSG(t *testing.T) {
 	// MSG-ANY is *OCTET. Even NUL, LF, etc. are spec-legal here (subject to
 	// receiver behaviour). Library must not reject.
@@ -733,21 +706,6 @@ func TestAppendRFC5424_DstUnchangedOnValidationError(t *testing.T) {
 	}
 }
 
-func TestAppendRFC3164_DstTruncatedOnSizeLimit(t *testing.T) {
-	// The packet-length check fires after writes have already started; on
-	// failure, dst must be truncated back to its original length.
-	dst := []byte("KEEP")
-	m := basicMessage3164()
-	m.Message = strings.Repeat("x", 2000) // forces > 1024
-	out, err := AppendRFC3164(dst, m)
-	if err == nil {
-		t.Fatal("want size-limit error")
-	}
-	if string(out) != "KEEP" {
-		t.Errorf("dst not truncated back: %q", out)
-	}
-}
-
 func TestFormatEqualsAppendNil_RFC3164(t *testing.T) {
 	m := basicMessage3164()
 	want, err := FormatRFC3164(m)
@@ -826,30 +784,18 @@ func TestRFC3164_TagLengthBoundary(t *testing.T) {
 	}
 }
 
-func TestRFC3164_PacketSizeBoundary(t *testing.T) {
-	// First measure header overhead by formatting with empty body, then
-	// build a body sized to push the total to exactly 1024 / 1025.
+func TestRFC3164_NoPacketSizeLimit(t *testing.T) {
+	// RFC 3164 §4.1's 1024-octet cap is UDP-specific and not enforced by
+	// the formatter — callers using TCP (RFC 6587) or TLS (RFC 5425) are
+	// not subject to it. UDP senders must check len(result) ≤ 1024 themselves.
 	m := basicMessage3164()
-	m.Message = ""
-	header, err := FormatRFC3164(m)
-	if err != nil {
-		t.Fatal(err)
-	}
-	headerLen := len(header)
-	bodyLen := rfc3164MaxPacket - headerLen
-
-	m.Message = strings.Repeat("x", bodyLen)
+	m.Message = strings.Repeat("x", 8192)
 	out, err := FormatRFC3164(m)
 	if err != nil {
-		t.Errorf("packet=1024 should be accepted: %v", err)
+		t.Fatalf("oversized message should be accepted: %v", err)
 	}
-	if len(out) != rfc3164MaxPacket {
-		t.Errorf("len = %d, want %d", len(out), rfc3164MaxPacket)
-	}
-
-	m.Message = strings.Repeat("x", bodyLen+1)
-	if _, err := FormatRFC3164(m); err == nil {
-		t.Error("packet=1025 should be rejected")
+	if len(out) <= 1024 {
+		t.Errorf("expected packet > 1024 octets, got %d", len(out))
 	}
 }
 
