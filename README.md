@@ -64,7 +64,17 @@ for _, m := range messages {
 conn.Write(f.Bytes())
 ```
 
-The same methods exist on `FrameRFC6587NonTransparent`, and there are `AddLogRFC3164` variants on both framers.
+Or pass a whole slice. On the first validation error the call stops and returns an error naming the index; messages already framed before that point stay in the buffer:
+
+```go
+f := syslog.NewFrameRFC6587()
+if err := f.AddLogsRFC5424(messages); err != nil {
+    log.Printf("partial batch: %v", err)
+}
+conn.Write(f.Bytes())
+```
+
+The same methods exist on `FrameRFC6587NonTransparent`, and there are `AddLogRFC3164` / `AddLogsRFC3164` variants on both framers.
 
 ## Performance
 
@@ -94,4 +104,6 @@ BenchmarkPipelineRFC5424_Octet                         193 ns/op     0 B/op  0 a
 BenchmarkFrameRFC6587_AddLogRFC5424                    192 ns/op     0 B/op  0 allocs/op
 BenchmarkPipelineRFC5424_NonTransp                     201 ns/op     0 B/op  0 allocs/op
 BenchmarkFrameRFC6587NonTransparent_AddLogRFC5424      189 ns/op     0 B/op  0 allocs/op
+BenchmarkFrameRFC6587_AddLogsRFC5424                 19822 ns/op     0 B/op  0 allocs/op  (100 msgs, 198 ns/msg)
+BenchmarkFrameRFC6587NonTransparent_AddLogsRFC5424   18197 ns/op     0 B/op  0 allocs/op  (100 msgs, 182 ns/msg)
 ```

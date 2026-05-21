@@ -728,6 +728,101 @@ func TestFrameRFC6587NonTransparent_NilReceiver_DirectMethods(t *testing.T) {
 	}
 }
 
+// AddLogsRFC* (batch): equivalence vs. a loop of AddLogRFC*.
+func TestFrameRFC6587_AddLogsRFC5424_MatchesLoop(t *testing.T) {
+	msgs := []*Message{basicMessage5424(), basicMessage5424(), basicMessage5424()}
+	for i, m := range msgs {
+		m.MsgID = fmt.Sprintf("ID%02d", i)
+	}
+
+	batch := NewFrameRFC6587()
+	if err := batch.AddLogsRFC5424(msgs); err != nil {
+		t.Fatal(err)
+	}
+	loop := NewFrameRFC6587()
+	for _, m := range msgs {
+		if err := loop.AddLogRFC5424(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !bytes.Equal(batch.Bytes(), loop.Bytes()) {
+		t.Errorf("batch vs loop differ:\n  batch: %q\n  loop:  %q", batch.Bytes(), loop.Bytes())
+	}
+}
+
+func TestFrameRFC6587NonTransparent_AddLogsRFC3164_MatchesLoop(t *testing.T) {
+	msgs := []*Message{basicMessage3164(), basicMessage3164(), basicMessage3164()}
+	for i, m := range msgs {
+		m.ProcID = fmt.Sprintf("%d", i)
+	}
+
+	batch := NewFrameRFC6587NonTransparent('\n')
+	if err := batch.AddLogsRFC3164(msgs); err != nil {
+		t.Fatal(err)
+	}
+	loop := NewFrameRFC6587NonTransparent('\n')
+	for _, m := range msgs {
+		if err := loop.AddLogRFC3164(m); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !bytes.Equal(batch.Bytes(), loop.Bytes()) {
+		t.Errorf("batch vs loop differ:\n  batch: %q\n  loop:  %q", batch.Bytes(), loop.Bytes())
+	}
+}
+
+// AddLogsRFC* (batch): mid-batch error stops at the bad message, keeps
+// pre-failure messages in f.buf, and the returned error names the index.
+func TestFrameRFC6587_AddLogsRFC5424_StopsAtBadMessage(t *testing.T) {
+	good := basicMessage5424()
+	bad := basicMessage5424()
+	bad.Severity = 99 // out of range
+	msgs := []*Message{good, good, bad, good}
+
+	f := NewFrameRFC6587()
+	err := f.AddLogsRFC5424(msgs)
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if !strings.Contains(err.Error(), "msg 2") {
+		t.Errorf("error should name index 2: %v", err)
+	}
+
+	// f.buf must hold exactly the two good messages framed.
+	expect := NewFrameRFC6587()
+	_ = expect.AddLogRFC5424(good)
+	_ = expect.AddLogRFC5424(good)
+	if !bytes.Equal(f.Bytes(), expect.Bytes()) {
+		t.Errorf("partial batch state wrong:\n  got:  %q\n  want: %q", f.Bytes(), expect.Bytes())
+	}
+}
+
+// AddLogsRFC* (batch): empty and nil slices are no-ops, not errors.
+func TestFrameRFC6587_AddLogsRFC5424_EmptyAndNil(t *testing.T) {
+	f := NewFrameRFC6587()
+	if err := f.AddLogsRFC5424(nil); err != nil {
+		t.Errorf("nil slice: %v", err)
+	}
+	if err := f.AddLogsRFC5424([]*Message{}); err != nil {
+		t.Errorf("empty slice: %v", err)
+	}
+	if f.Size() != 0 {
+		t.Errorf("buffer unexpectedly populated: %q", f.Bytes())
+	}
+}
+
+// AddLogsRFC* (batch): nil receiver must error even on an empty slice.
+func TestFrameRFC6587_AddLogsRFC5424_NilReceiver(t *testing.T) {
+	var f *FrameRFC6587
+	if err := f.AddLogsRFC5424(nil); err == nil {
+		t.Error("nil receiver should error")
+	}
+	var fnt *FrameRFC6587NonTransparent
+	if err := fnt.AddLogsRFC3164(nil); err == nil {
+		t.Error("nil receiver should error")
+	}
+}
+
 // -----------------------------------------------------------------------------
 // Complex / freeform message bodies
 //
@@ -1812,6 +1907,64 @@ func BenchmarkFrameRFC6587NonTransparent_AddLogRFC5424(b *testing.B) {
 	b.ReportAllocs()
 	for b.Loop() {
 		if err := f.AddLogRFC5424(m); err != nil {
+			b.Fatal(err)
+		}
+		if f.Size() > 1<<20 {
+			f.Reset()
+		}
+	}
+}
+
+// BenchmarkFrameRFC6587_AddLogsRFC5424 frames a slice of 100 messages in
+// one call. Reported as ns/op per batch; divide by 100 for per-message.
+func BenchmarkFrameRFC6587_AddLogsRFC5424(b *testing.B) {
+	const N = 100
+	m := &Message{
+		Facility:  FacLocal4,
+		Severity:  SevNotice,
+		Timestamp: time.Date(2026, time.October, 11, 22, 14, 15, 3000000, time.UTC),
+		Hostname:  "mymachine.example.com",
+		AppName:   "myapp",
+		ProcID:    "1234",
+		MsgID:     "ID47",
+		Message:   "user login succeeded for alice from 192.0.2.7",
+	}
+	msgs := make([]*Message, N)
+	for i := range msgs {
+		msgs[i] = m
+	}
+	f := NewFrameRFC6587()
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := f.AddLogsRFC5424(msgs); err != nil {
+			b.Fatal(err)
+		}
+		if f.Size() > 1<<20 {
+			f.Reset()
+		}
+	}
+}
+
+func BenchmarkFrameRFC6587NonTransparent_AddLogsRFC5424(b *testing.B) {
+	const N = 100
+	m := &Message{
+		Facility:  FacLocal4,
+		Severity:  SevNotice,
+		Timestamp: time.Date(2026, time.October, 11, 22, 14, 15, 3000000, time.UTC),
+		Hostname:  "mymachine.example.com",
+		AppName:   "myapp",
+		ProcID:    "1234",
+		MsgID:     "ID47",
+		Message:   "user login succeeded for alice from 192.0.2.7",
+	}
+	msgs := make([]*Message, N)
+	for i := range msgs {
+		msgs[i] = m
+	}
+	f := NewFrameRFC6587NonTransparent('\n')
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := f.AddLogsRFC5424(msgs); err != nil {
 			b.Fatal(err)
 		}
 		if f.Size() > 1<<20 {

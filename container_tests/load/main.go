@@ -23,6 +23,7 @@ import (
 	"os"
 	"runtime"
 	"runtime/pprof"
+	"strconv"
 	"strings"
 	"time"
 
@@ -139,24 +140,24 @@ func main() {
 	// validates that RFC 3164 over TCP correctly carries >1024-octet packets
 	// (the §4.1 cap is UDP-only and no longer enforced by the formatter).
 	//
-	// These paths use the direct framer methods (FrameRFC6587.AddLogRFC*)
-	// instead of the AppendRFC* + AddLog two-step. End-to-end byte-exact
-	// diff against rsyslog catches any divergence between the two APIs.
-	nLargeOctet3164 = sendTCPOctetDirect(tcpOctet, expectF, "tcp/octet-large/3164",
+	// These paths use the batch framer methods (FrameRFC6587.AddLogsRFC*)
+	// — one call per ~1k message chunk — so end-to-end byte-exact diff
+	// against rsyslog catches any wire-format divergence in the batch path.
+	nLargeOctet3164 = sendTCPOctetBatch(tcpOctet, expectF, "tcp/octet-large/3164",
 		bulkLarge3164(largePerCategory, "3164-tcp-octet-large"),
-		func(f *syslog.FrameRFC6587, m *syslog.Message) error { return f.AddLogRFC3164(m) })
+		func(f *syslog.FrameRFC6587, msgs []*syslog.Message) error { return f.AddLogsRFC3164(msgs) })
 
-	nLargeOctet5424 = sendTCPOctetDirect(tcpOctet, expectF, "tcp/octet-large/5424",
+	nLargeOctet5424 = sendTCPOctetBatch(tcpOctet, expectF, "tcp/octet-large/5424",
 		bulkLarge5424(largePerCategory, "5424-tcp-octet-large"),
-		func(f *syslog.FrameRFC6587, m *syslog.Message) error { return f.AddLogRFC5424(m) })
+		func(f *syslog.FrameRFC6587, msgs []*syslog.Message) error { return f.AddLogsRFC5424(msgs) })
 
-	nLargeNT3164 = sendTCPNonTranspDirect(tcpNT, expectF, "tcp/nt-large/3164",
+	nLargeNT3164 = sendTCPNonTranspBatch(tcpNT, expectF, "tcp/nt-large/3164",
 		bulkLarge3164(largePerCategory, "3164-tcp-nt-large"),
-		func(f *syslog.FrameRFC6587NonTransparent, m *syslog.Message) error { return f.AddLogRFC3164(m) })
+		func(f *syslog.FrameRFC6587NonTransparent, msgs []*syslog.Message) error { return f.AddLogsRFC3164(msgs) })
 
-	nLargeNT5424 = sendTCPNonTranspDirect(tcpNT, expectF, "tcp/nt-large/5424",
+	nLargeNT5424 = sendTCPNonTranspBatch(tcpNT, expectF, "tcp/nt-large/5424",
 		bulkLarge5424(largePerCategory, "5424-tcp-nt-large"),
-		func(f *syslog.FrameRFC6587NonTransparent, m *syslog.Message) error { return f.AddLogRFC5424(m) })
+		func(f *syslog.FrameRFC6587NonTransparent, msgs []*syslog.Message) error { return f.AddLogsRFC5424(msgs) })
 
 	total := nUDP3164 + nUDP5424 +
 		nTCPOctet3164 + nTCPOctet5424 +
@@ -359,83 +360,86 @@ func sendTCPNonTransp(c net.Conn, expect *bufio.Writer,
 	return sent
 }
 
-// sendTCPOctetDirect exercises FrameRFC6587.AddLogRFC* — the in-place
-// formatter that skips a caller-side scratch buffer. The expect-file
-// message bytes are extracted from the frame's tail rather than
-// re-formatted, so a divergence between the frame's serialisation and
-// the format functions would fail the wire diff.
-func sendTCPOctetDirect(c net.Conn, expect *bufio.Writer, label string,
+// sendTCPOctetBatch exercises FrameRFC6587.AddLogsRFC* — one call per
+// chunk-of-flushEvery. To populate the expect file we parse the framed
+// bytes back into individual messages via the "LEN SP MSG" grammar.
+// Any wire-format bug in the batch path therefore fails the byte-exact
+// diff against rsyslog.
+func sendTCPOctetBatch(c net.Conn, expect *bufio.Writer, label string,
 	msgs []*syslog.Message,
-	addToFrame func(*syslog.FrameRFC6587, *syslog.Message) error) int {
+	addBatchToFrame func(*syslog.FrameRFC6587, []*syslog.Message) error) int {
 
-	sent := 0
-	frame := syslog.NewFrameRFC6587()
 	const flushEvery = 1000
-	for i, m := range msgs {
-		prevSize := frame.Size()
-		if err := addToFrame(frame, m); err != nil {
-			log.Fatalf("%s seq=%d frame: %v", label, i, err)
+	frame := syslog.NewFrameRFC6587()
+	sent := 0
+	for chunkStart := 0; chunkStart < len(msgs); chunkStart += flushEvery {
+		end := min(chunkStart+flushEvery, len(msgs))
+		chunk := msgs[chunkStart:end]
+		if err := addBatchToFrame(frame, chunk); err != nil {
+			log.Fatalf("%s batch start=%d: %v", label, chunkStart, err)
 		}
-		// Frame tail = "LEN SP MSG". The first space terminates LEN
-		// (LEN is digits-only) so msg-start is right after it.
-		added := frame.Bytes()[prevSize:]
-		sp := bytes.IndexByte(added, ' ')
-		if sp < 0 {
-			log.Fatalf("%s seq=%d: framed bytes missing length separator: %q", label, i, added)
-		}
-		_, _ = expect.WriteString("[imtcp] ")
-		_, _ = expect.Write(added[sp+1:])
-		_ = expect.WriteByte('\n')
-		sent++
-		if sent%flushEvery == 0 {
-			if err := writeAll(c, frame.Bytes()); err != nil {
-				log.Fatalf("%s flush: %v", label, err)
+		// Parse the chunk's framed bytes into per-message expect lines.
+		b := frame.Bytes()
+		for len(b) > 0 {
+			sp := bytes.IndexByte(b, ' ')
+			if sp < 0 {
+				log.Fatalf("%s: framed chunk missing length separator", label)
 			}
-			frame.Reset()
+			msgLen, err := strconv.Atoi(string(b[:sp]))
+			if err != nil || msgLen <= 0 {
+				log.Fatalf("%s: bad MSG-LEN %q: %v", label, b[:sp], err)
+			}
+			frameLen := sp + 1 + msgLen
+			if frameLen > len(b) {
+				log.Fatalf("%s: MSG-LEN %d exceeds remaining %d", label, msgLen, len(b))
+			}
+			_, _ = expect.WriteString("[imtcp] ")
+			_, _ = expect.Write(b[sp+1 : frameLen])
+			_ = expect.WriteByte('\n')
+			b = b[frameLen:]
+			sent++
 		}
-	}
-	if frame.Size() > 0 {
 		if err := writeAll(c, frame.Bytes()); err != nil {
-			log.Fatalf("%s final flush: %v", label, err)
+			log.Fatalf("%s flush: %v", label, err)
 		}
+		frame.Reset()
 	}
 	return sent
 }
 
-// sendTCPNonTranspDirect is the non-transparent counterpart of
-// sendTCPOctetDirect. The frame's tail is "MSG TRAILER"; the trailer is
-// always exactly one byte.
-func sendTCPNonTranspDirect(c net.Conn, expect *bufio.Writer, label string,
+// sendTCPNonTranspBatch is the non-transparent counterpart. The framed
+// bytes are split on the trailer byte (LF here) — message MUST NOT
+// contain it, which is the same invariant the framer enforces.
+func sendTCPNonTranspBatch(c net.Conn, expect *bufio.Writer, label string,
 	msgs []*syslog.Message,
-	addToFrame func(*syslog.FrameRFC6587NonTransparent, *syslog.Message) error) int {
+	addBatchToFrame func(*syslog.FrameRFC6587NonTransparent, []*syslog.Message) error) int {
 
-	sent := 0
-	frame := syslog.NewFrameRFC6587NonTransparent('\n')
 	const flushEvery = 1000
-	for i, m := range msgs {
-		prevSize := frame.Size()
-		if err := addToFrame(frame, m); err != nil {
-			log.Fatalf("%s seq=%d frame: %v", label, i, err)
+	const trailer = '\n'
+	frame := syslog.NewFrameRFC6587NonTransparent(trailer)
+	sent := 0
+	for chunkStart := 0; chunkStart < len(msgs); chunkStart += flushEvery {
+		end := min(chunkStart+flushEvery, len(msgs))
+		chunk := msgs[chunkStart:end]
+		if err := addBatchToFrame(frame, chunk); err != nil {
+			log.Fatalf("%s batch start=%d: %v", label, chunkStart, err)
 		}
-		added := frame.Bytes()[prevSize:]
-		if len(added) < 1 {
-			log.Fatalf("%s seq=%d: framed bytes shorter than trailer", label, i)
-		}
-		_, _ = expect.WriteString("[imtcp] ")
-		_, _ = expect.Write(added[:len(added)-1]) // strip trailer
-		_ = expect.WriteByte('\n')
-		sent++
-		if sent%flushEvery == 0 {
-			if err := writeAll(c, frame.Bytes()); err != nil {
-				log.Fatalf("%s flush: %v", label, err)
+		b := frame.Bytes()
+		for len(b) > 0 {
+			i := bytes.IndexByte(b, trailer)
+			if i < 0 {
+				log.Fatalf("%s: framed chunk missing trailer", label)
 			}
-			frame.Reset()
+			_, _ = expect.WriteString("[imtcp] ")
+			_, _ = expect.Write(b[:i])
+			_ = expect.WriteByte('\n')
+			b = b[i+1:]
+			sent++
 		}
-	}
-	if frame.Size() > 0 {
 		if err := writeAll(c, frame.Bytes()); err != nil {
-			log.Fatalf("%s final flush: %v", label, err)
+			log.Fatalf("%s flush: %v", label, err)
 		}
+		frame.Reset()
 	}
 	return sent
 }

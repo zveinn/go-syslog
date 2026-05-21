@@ -121,6 +121,36 @@ func (f *FrameRFC6587) framePrefix(start int) error {
 	return nil
 }
 
+// AddLogsRFC3164 frames every message in msgs as RFC 3164 with octet-
+// counting. On the first validation error it stops and returns an error
+// identifying the message's index; messages added before the failure
+// remain in f.buf.
+func (f *FrameRFC6587) AddLogsRFC3164(msgs []*Message) error {
+	if f == nil {
+		return fmt.Errorf("syslog: nil FrameRFC6587")
+	}
+	for i, m := range msgs {
+		if err := f.AddLogRFC3164(m); err != nil {
+			return fmt.Errorf("syslog: AddLogsRFC3164 msg %d: %w", i, err)
+		}
+	}
+	return nil
+}
+
+// AddLogsRFC5424 frames every message in msgs as RFC 5424 with octet-
+// counting. Error semantics match AddLogsRFC3164.
+func (f *FrameRFC6587) AddLogsRFC5424(msgs []*Message) error {
+	if f == nil {
+		return fmt.Errorf("syslog: nil FrameRFC6587")
+	}
+	for i, m := range msgs {
+		if err := f.AddLogRFC5424(m); err != nil {
+			return fmt.Errorf("syslog: AddLogsRFC5424 msg %d: %w", i, err)
+		}
+	}
+	return nil
+}
+
 // decimalWidth returns the number of base-10 digits needed to represent n.
 // n must be positive; behaviour is unspecified otherwise.
 func decimalWidth(n int) int {
@@ -238,6 +268,36 @@ func (f *FrameRFC6587NonTransparent) AddLogRFC5424(m *Message) error {
 		return err
 	}
 	return f.frameTrailer(start)
+}
+
+// AddLogsRFC3164 frames every message in msgs as RFC 3164 with the
+// configured trailer byte. On the first validation error it stops and
+// returns an error identifying the message's index; messages added
+// before the failure remain in f.buf.
+func (f *FrameRFC6587NonTransparent) AddLogsRFC3164(msgs []*Message) error {
+	if f == nil {
+		return fmt.Errorf("syslog: nil FrameRFC6587NonTransparent")
+	}
+	for i, m := range msgs {
+		if err := f.AddLogRFC3164(m); err != nil {
+			return fmt.Errorf("syslog: AddLogsRFC3164 msg %d: %w", i, err)
+		}
+	}
+	return nil
+}
+
+// AddLogsRFC5424 frames every message in msgs as RFC 5424 with the
+// configured trailer byte. Error semantics match AddLogsRFC3164.
+func (f *FrameRFC6587NonTransparent) AddLogsRFC5424(msgs []*Message) error {
+	if f == nil {
+		return fmt.Errorf("syslog: nil FrameRFC6587NonTransparent")
+	}
+	for i, m := range msgs {
+		if err := f.AddLogRFC5424(m); err != nil {
+			return fmt.Errorf("syslog: AddLogsRFC5424 msg %d: %w", i, err)
+		}
+	}
+	return nil
 }
 
 // frameTrailer validates the just-appended message at f.buf[start:] doesn't
