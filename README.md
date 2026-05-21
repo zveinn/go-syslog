@@ -86,11 +86,6 @@ BenchmarkFrameRFC6587NonTransparent_AddLog             9.9 ns/op     0 B/op  0 a
 BenchmarkFrameRFC6587NonTransparent_Size              0.54 ns/op     0 B/op  0 allocs/op
 BenchmarkFrameRFC6587NonTransparent_Bytes              1.1 ns/op     0 B/op  0 allocs/op
 BenchmarkFrameRFC6587NonTransparent_Reset             0.54 ns/op     0 B/op  0 allocs/op
-```
-
-Format-and-frame pipelines, end-to-end (one append into a reused buffer, then framing). The `Pipeline*` rows are the two-step `AppendRFC*` + `AddLog` pattern; the `AddLogRFC*` rows are the direct in-place methods. Both write the same wire bytes:
-
-```
 BenchmarkPipelineRFC3164_Octet                         108 ns/op     0 B/op  0 allocs/op
 BenchmarkFrameRFC6587_AddLogRFC3164                    106 ns/op     0 B/op  0 allocs/op
 BenchmarkPipelineRFC3164_NonTransp                     103 ns/op     0 B/op  0 allocs/op
@@ -100,5 +95,3 @@ BenchmarkFrameRFC6587_AddLogRFC5424                    192 ns/op     0 B/op  0 a
 BenchmarkPipelineRFC5424_NonTransp                     201 ns/op     0 B/op  0 allocs/op
 BenchmarkFrameRFC6587NonTransparent_AddLogRFC5424      189 ns/op     0 B/op  0 allocs/op
 ```
-
-The direct methods are within noise of the two-step pattern for octet counting and a few percent faster for non transparent framing. The bigger win is ergonomic: callers do not need to own a scratch buffer.
