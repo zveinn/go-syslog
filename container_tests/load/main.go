@@ -14,6 +14,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"flag"
 	"fmt"
 	"log"
@@ -137,25 +138,25 @@ func main() {
 	// Stress-tests both framings with messages well above any UDP MTU. Also
 	// validates that RFC 3164 over TCP correctly carries >1024-octet packets
 	// (the §4.1 cap is UDP-only and no longer enforced by the formatter).
-	nLargeOctet3164 = sendTCPOctet(tcpOctet, expectF,
-		nil,
+	//
+	// These paths use the direct framer methods (FrameRFC6587.AddLogRFC*)
+	// instead of the AppendRFC* + AddLog two-step. End-to-end byte-exact
+	// diff against rsyslog catches any divergence between the two APIs.
+	nLargeOctet3164 = sendTCPOctetDirect(tcpOctet, expectF, "tcp/octet-large/3164",
 		bulkLarge3164(largePerCategory, "3164-tcp-octet-large"),
-		syslog.AppendRFC3164)
+		func(f *syslog.FrameRFC6587, m *syslog.Message) error { return f.AddLogRFC3164(m) })
 
-	nLargeOctet5424 = sendTCPOctet(tcpOctet, expectF,
-		nil,
+	nLargeOctet5424 = sendTCPOctetDirect(tcpOctet, expectF, "tcp/octet-large/5424",
 		bulkLarge5424(largePerCategory, "5424-tcp-octet-large"),
-		syslog.AppendRFC5424)
+		func(f *syslog.FrameRFC6587, m *syslog.Message) error { return f.AddLogRFC5424(m) })
 
-	nLargeNT3164 = sendTCPNonTransp(tcpNT, expectF,
-		nil,
+	nLargeNT3164 = sendTCPNonTranspDirect(tcpNT, expectF, "tcp/nt-large/3164",
 		bulkLarge3164(largePerCategory, "3164-tcp-nt-large"),
-		syslog.AppendRFC3164)
+		func(f *syslog.FrameRFC6587NonTransparent, m *syslog.Message) error { return f.AddLogRFC3164(m) })
 
-	nLargeNT5424 = sendTCPNonTransp(tcpNT, expectF,
-		nil,
+	nLargeNT5424 = sendTCPNonTranspDirect(tcpNT, expectF, "tcp/nt-large/5424",
 		bulkLarge5424(largePerCategory, "5424-tcp-nt-large"),
-		syslog.AppendRFC5424)
+		func(f *syslog.FrameRFC6587NonTransparent, m *syslog.Message) error { return f.AddLogRFC5424(m) })
 
 	total := nUDP3164 + nUDP5424 +
 		nTCPOctet3164 + nTCPOctet5424 +
@@ -353,6 +354,87 @@ func sendTCPNonTransp(c net.Conn, expect *bufio.Writer,
 	if frame.Size() > 0 {
 		if err := writeAll(c, frame.Bytes()); err != nil {
 			log.Fatalf("tcp/nt final flush: %v", err)
+		}
+	}
+	return sent
+}
+
+// sendTCPOctetDirect exercises FrameRFC6587.AddLogRFC* — the in-place
+// formatter that skips a caller-side scratch buffer. The expect-file
+// message bytes are extracted from the frame's tail rather than
+// re-formatted, so a divergence between the frame's serialisation and
+// the format functions would fail the wire diff.
+func sendTCPOctetDirect(c net.Conn, expect *bufio.Writer, label string,
+	msgs []*syslog.Message,
+	addToFrame func(*syslog.FrameRFC6587, *syslog.Message) error) int {
+
+	sent := 0
+	frame := syslog.NewFrameRFC6587()
+	const flushEvery = 1000
+	for i, m := range msgs {
+		prevSize := frame.Size()
+		if err := addToFrame(frame, m); err != nil {
+			log.Fatalf("%s seq=%d frame: %v", label, i, err)
+		}
+		// Frame tail = "LEN SP MSG". The first space terminates LEN
+		// (LEN is digits-only) so msg-start is right after it.
+		added := frame.Bytes()[prevSize:]
+		sp := bytes.IndexByte(added, ' ')
+		if sp < 0 {
+			log.Fatalf("%s seq=%d: framed bytes missing length separator: %q", label, i, added)
+		}
+		_, _ = expect.WriteString("[imtcp] ")
+		_, _ = expect.Write(added[sp+1:])
+		_ = expect.WriteByte('\n')
+		sent++
+		if sent%flushEvery == 0 {
+			if err := writeAll(c, frame.Bytes()); err != nil {
+				log.Fatalf("%s flush: %v", label, err)
+			}
+			frame.Reset()
+		}
+	}
+	if frame.Size() > 0 {
+		if err := writeAll(c, frame.Bytes()); err != nil {
+			log.Fatalf("%s final flush: %v", label, err)
+		}
+	}
+	return sent
+}
+
+// sendTCPNonTranspDirect is the non-transparent counterpart of
+// sendTCPOctetDirect. The frame's tail is "MSG TRAILER"; the trailer is
+// always exactly one byte.
+func sendTCPNonTranspDirect(c net.Conn, expect *bufio.Writer, label string,
+	msgs []*syslog.Message,
+	addToFrame func(*syslog.FrameRFC6587NonTransparent, *syslog.Message) error) int {
+
+	sent := 0
+	frame := syslog.NewFrameRFC6587NonTransparent('\n')
+	const flushEvery = 1000
+	for i, m := range msgs {
+		prevSize := frame.Size()
+		if err := addToFrame(frame, m); err != nil {
+			log.Fatalf("%s seq=%d frame: %v", label, i, err)
+		}
+		added := frame.Bytes()[prevSize:]
+		if len(added) < 1 {
+			log.Fatalf("%s seq=%d: framed bytes shorter than trailer", label, i)
+		}
+		_, _ = expect.WriteString("[imtcp] ")
+		_, _ = expect.Write(added[:len(added)-1]) // strip trailer
+		_ = expect.WriteByte('\n')
+		sent++
+		if sent%flushEvery == 0 {
+			if err := writeAll(c, frame.Bytes()); err != nil {
+				log.Fatalf("%s flush: %v", label, err)
+			}
+			frame.Reset()
+		}
+	}
+	if frame.Size() > 0 {
+		if err := writeAll(c, frame.Bytes()); err != nil {
+			log.Fatalf("%s final flush: %v", label, err)
 		}
 	}
 	return sent

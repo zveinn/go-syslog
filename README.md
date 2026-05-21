@@ -51,24 +51,54 @@ f.AddLog(msg2)
 conn.Write(f.Bytes())
 ```
 
+Format and frame in one call. The framer formats directly into its own buffer so the caller does not need a scratch slice:
+
+```go
+f := syslog.NewFrameRFC6587()
+for _, m := range messages {
+    if err := f.AddLogRFC5424(m); err != nil {
+        // m had a validation error; f's buffer is left unchanged
+        continue
+    }
+}
+conn.Write(f.Bytes())
+```
+
+The same methods exist on `FrameRFC6587NonTransparent`, and there are `AddLogRFC3164` variants on both framers.
+
 ## Performance
 
 ```
-BenchmarkNewPriority                              1.3 ns/op     0 B/op  0 allocs/op
-BenchmarkPriority_Facility                        0.4 ns/op     0 B/op  0 allocs/op
-BenchmarkPriority_Severity                        0.4 ns/op     0 B/op  0 allocs/op
-BenchmarkAppendRFC3164                             74 ns/op     0 B/op  0 allocs/op
-BenchmarkAppendRFC5424                            285 ns/op     0 B/op  0 allocs/op
-BenchmarkFormatRFC3164                            109 ns/op   112 B/op  1 allocs/op
-BenchmarkFormatRFC5424                            375 ns/op   224 B/op  1 allocs/op
-BenchmarkNewFrameRFC6587                           18 ns/op    24 B/op  1 allocs/op
-BenchmarkFrameRFC6587_AddLog                      8.9 ns/op     0 B/op  0 allocs/op
-BenchmarkFrameRFC6587_Size                        0.4 ns/op     0 B/op  0 allocs/op
-BenchmarkFrameRFC6587_Bytes                       0.8 ns/op     0 B/op  0 allocs/op
-BenchmarkFrameRFC6587_Reset                       0.5 ns/op     0 B/op  0 allocs/op
-BenchmarkNewFrameRFC6587NonTransparent             20 ns/op    32 B/op  1 allocs/op
-BenchmarkFrameRFC6587NonTransparent_AddLog        7.7 ns/op     0 B/op  0 allocs/op
-BenchmarkFrameRFC6587NonTransparent_Size          0.4 ns/op     0 B/op  0 allocs/op
-BenchmarkFrameRFC6587NonTransparent_Bytes         0.9 ns/op     0 B/op  0 allocs/op
-BenchmarkFrameRFC6587NonTransparent_Reset         0.6 ns/op     0 B/op  0 allocs/op
+BenchmarkNewPriority                                  0.47 ns/op     0 B/op  0 allocs/op
+BenchmarkPriority_Facility                            0.54 ns/op     0 B/op  0 allocs/op
+BenchmarkPriority_Severity                            0.55 ns/op     0 B/op  0 allocs/op
+BenchmarkAppendRFC3164                                  93 ns/op     0 B/op  0 allocs/op
+BenchmarkAppendRFC5424                                 337 ns/op     0 B/op  0 allocs/op
+BenchmarkFormatRFC3164                                 133 ns/op   112 B/op  1 allocs/op
+BenchmarkFormatRFC5424                                 437 ns/op   224 B/op  1 allocs/op
+BenchmarkNewFrameRFC6587                                21 ns/op    24 B/op  1 allocs/op
+BenchmarkFrameRFC6587_AddLog                          11.2 ns/op     0 B/op  0 allocs/op
+BenchmarkFrameRFC6587_Size                            0.55 ns/op     0 B/op  0 allocs/op
+BenchmarkFrameRFC6587_Bytes                            1.1 ns/op     0 B/op  0 allocs/op
+BenchmarkFrameRFC6587_Reset                           0.82 ns/op     0 B/op  0 allocs/op
+BenchmarkNewFrameRFC6587NonTransparent                  22 ns/op    32 B/op  1 allocs/op
+BenchmarkFrameRFC6587NonTransparent_AddLog             9.9 ns/op     0 B/op  0 allocs/op
+BenchmarkFrameRFC6587NonTransparent_Size              0.54 ns/op     0 B/op  0 allocs/op
+BenchmarkFrameRFC6587NonTransparent_Bytes              1.1 ns/op     0 B/op  0 allocs/op
+BenchmarkFrameRFC6587NonTransparent_Reset             0.54 ns/op     0 B/op  0 allocs/op
 ```
+
+Format-and-frame pipelines, end-to-end (one append into a reused buffer, then framing). The `Pipeline*` rows are the two-step `AppendRFC*` + `AddLog` pattern; the `AddLogRFC*` rows are the direct in-place methods. Both write the same wire bytes:
+
+```
+BenchmarkPipelineRFC3164_Octet                         108 ns/op     0 B/op  0 allocs/op
+BenchmarkFrameRFC6587_AddLogRFC3164                    106 ns/op     0 B/op  0 allocs/op
+BenchmarkPipelineRFC3164_NonTransp                     103 ns/op     0 B/op  0 allocs/op
+BenchmarkFrameRFC6587NonTransparent_AddLogRFC3164      102 ns/op     0 B/op  0 allocs/op
+BenchmarkPipelineRFC5424_Octet                         193 ns/op     0 B/op  0 allocs/op
+BenchmarkFrameRFC6587_AddLogRFC5424                    192 ns/op     0 B/op  0 allocs/op
+BenchmarkPipelineRFC5424_NonTransp                     201 ns/op     0 B/op  0 allocs/op
+BenchmarkFrameRFC6587NonTransparent_AddLogRFC5424      189 ns/op     0 B/op  0 allocs/op
+```
+
+The direct methods are within noise of the two-step pattern for octet counting and a few percent faster for non transparent framing. The bigger win is ergonomic: callers do not need to own a scratch buffer.

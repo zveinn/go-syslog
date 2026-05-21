@@ -60,6 +60,91 @@ func (f *FrameRFC6587) Reset() {
 	f.buf = f.buf[:0]
 }
 
+// AddLogRFC3164 formats m as RFC 3164 directly into f's buffer and prepends
+// the octet-count framing in place. Equivalent to AppendRFC3164 followed by
+// AddLog but skips the caller-side scratch buffer.
+func (f *FrameRFC6587) AddLogRFC3164(m *Message) error {
+	if f == nil {
+		return fmt.Errorf("syslog: nil FrameRFC6587")
+	}
+	start := len(f.buf)
+	var err error
+	f.buf, err = AppendRFC3164(f.buf, m)
+	if err != nil {
+		f.buf = f.buf[:start]
+		return err
+	}
+	return f.framePrefix(start)
+}
+
+// AddLogRFC5424 formats m as RFC 5424 directly into f's buffer and prepends
+// the octet-count framing in place. Equivalent to AppendRFC5424 followed by
+// AddLog but skips the caller-side scratch buffer.
+func (f *FrameRFC6587) AddLogRFC5424(m *Message) error {
+	if f == nil {
+		return fmt.Errorf("syslog: nil FrameRFC6587")
+	}
+	start := len(f.buf)
+	var err error
+	f.buf, err = AppendRFC5424(f.buf, m)
+	if err != nil {
+		f.buf = f.buf[:start]
+		return err
+	}
+	return f.framePrefix(start)
+}
+
+// framePrefix inserts "LEN SP" at offset start, where the message bytes
+// already occupy f.buf[start:]. It shifts those bytes right via an
+// overlapping copy and writes the decimal length + space in the freed slot.
+// f.buf is left at its pre-call state on error.
+func (f *FrameRFC6587) framePrefix(start int) error {
+	msgLen := len(f.buf) - start
+	if msgLen == 0 {
+		f.buf = f.buf[:start]
+		return fmt.Errorf("syslog: empty log")
+	}
+	digits := decimalWidth(msgLen)
+	prefixLen := digits + 1
+	// Grow by prefixLen. The pad bytes will be overwritten; the array
+	// literal doubles as a single-shot append for the slice growth.
+	var pad [10]byte
+	f.buf = append(f.buf, pad[:prefixLen]...)
+	// Overlapping copy = memmove. Shifts the message bytes right by prefixLen.
+	copy(f.buf[start+prefixLen:], f.buf[start:start+msgLen])
+	n := msgLen
+	for i := digits - 1; i >= 0; i-- {
+		f.buf[start+i] = '0' + byte(n%10)
+		n /= 10
+	}
+	f.buf[start+digits] = ' '
+	return nil
+}
+
+// decimalWidth returns the number of base-10 digits needed to represent n.
+// n must be positive; behaviour is unspecified otherwise.
+func decimalWidth(n int) int {
+	switch {
+	case n < 10:
+		return 1
+	case n < 100:
+		return 2
+	case n < 1_000:
+		return 3
+	case n < 10_000:
+		return 4
+	case n < 100_000:
+		return 5
+	case n < 1_000_000:
+		return 6
+	case n < 10_000_000:
+		return 7
+	case n < 100_000_000:
+		return 8
+	}
+	return 9
+}
+
 // FrameRFC6587NonTransparent accumulates syslog messages using RFC 6587
 // §3.4.2 non-transparent framing: each message is followed by a single
 // trailer byte. The RFC default and most widely supported choice is LF
@@ -119,4 +204,52 @@ func (f *FrameRFC6587NonTransparent) Reset() {
 		return
 	}
 	f.buf = f.buf[:0]
+}
+
+// AddLogRFC3164 formats m as RFC 3164 directly into f's buffer and appends
+// the trailer in place. Equivalent to AppendRFC3164 followed by AddLog but
+// skips the caller-side scratch buffer.
+func (f *FrameRFC6587NonTransparent) AddLogRFC3164(m *Message) error {
+	if f == nil {
+		return fmt.Errorf("syslog: nil FrameRFC6587NonTransparent")
+	}
+	start := len(f.buf)
+	var err error
+	f.buf, err = AppendRFC3164(f.buf, m)
+	if err != nil {
+		f.buf = f.buf[:start]
+		return err
+	}
+	return f.frameTrailer(start)
+}
+
+// AddLogRFC5424 formats m as RFC 5424 directly into f's buffer and appends
+// the trailer in place. Equivalent to AppendRFC5424 followed by AddLog but
+// skips the caller-side scratch buffer.
+func (f *FrameRFC6587NonTransparent) AddLogRFC5424(m *Message) error {
+	if f == nil {
+		return fmt.Errorf("syslog: nil FrameRFC6587NonTransparent")
+	}
+	start := len(f.buf)
+	var err error
+	f.buf, err = AppendRFC5424(f.buf, m)
+	if err != nil {
+		f.buf = f.buf[:start]
+		return err
+	}
+	return f.frameTrailer(start)
+}
+
+// frameTrailer validates the just-appended message at f.buf[start:] doesn't
+// contain the trailer byte, then appends it. f.buf is reverted on error.
+func (f *FrameRFC6587NonTransparent) frameTrailer(start int) error {
+	if len(f.buf) == start {
+		return fmt.Errorf("syslog: empty log")
+	}
+	if bytes.IndexByte(f.buf[start:], f.trailer) >= 0 {
+		f.buf = f.buf[:start]
+		return fmt.Errorf("syslog: log contains trailer byte %#x", f.trailer)
+	}
+	f.buf = append(f.buf, f.trailer)
+	return nil
 }

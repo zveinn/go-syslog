@@ -508,6 +508,227 @@ func TestFrameRFC6587NonTransparent_Reset(t *testing.T) {
 }
 
 // -----------------------------------------------------------------------------
+// Direct framer methods (AddLogRFC3164 / AddLogRFC5424)
+// -----------------------------------------------------------------------------
+
+// addLogRFCDirectCases pins each direct method's output byte-for-byte against
+// the two-step AppendRFC* + AddLog path. Any divergence indicates a framing
+// bug, not just a perf regression.
+func TestFrameRFC6587_AddLogRFCDirect_MatchesTwoStep(t *testing.T) {
+	cases := []struct {
+		name string
+		app  func(dst []byte, m *Message) ([]byte, error)
+		add  func(f *FrameRFC6587, m *Message) error
+		msg  *Message
+	}{
+		{"3164/basic", AppendRFC3164,
+			func(f *FrameRFC6587, m *Message) error { return f.AddLogRFC3164(m) },
+			basicMessage3164()},
+		{"5424/basic", AppendRFC5424,
+			func(f *FrameRFC6587, m *Message) error { return f.AddLogRFC5424(m) },
+			basicMessage5424()},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			twoStep := NewFrameRFC6587()
+			buf, err := tc.app(nil, tc.msg)
+			if err != nil {
+				t.Fatalf("Append: %v", err)
+			}
+			if err := twoStep.AddLog(buf); err != nil {
+				t.Fatalf("AddLog: %v", err)
+			}
+			direct := NewFrameRFC6587()
+			if err := tc.add(direct, tc.msg); err != nil {
+				t.Fatalf("AddLogRFC*: %v", err)
+			}
+			if !bytes.Equal(direct.Bytes(), twoStep.Bytes()) {
+				t.Errorf("framed bytes differ:\n  direct:   %q\n  two-step: %q",
+					direct.Bytes(), twoStep.Bytes())
+			}
+		})
+	}
+}
+
+func TestFrameRFC6587NonTransparent_AddLogRFCDirect_MatchesTwoStep(t *testing.T) {
+	cases := []struct {
+		name string
+		app  func(dst []byte, m *Message) ([]byte, error)
+		add  func(f *FrameRFC6587NonTransparent, m *Message) error
+		msg  *Message
+	}{
+		{"3164/basic", AppendRFC3164,
+			func(f *FrameRFC6587NonTransparent, m *Message) error { return f.AddLogRFC3164(m) },
+			basicMessage3164()},
+		{"5424/basic", AppendRFC5424,
+			func(f *FrameRFC6587NonTransparent, m *Message) error { return f.AddLogRFC5424(m) },
+			basicMessage5424()},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			twoStep := NewFrameRFC6587NonTransparent('\n')
+			buf, err := tc.app(nil, tc.msg)
+			if err != nil {
+				t.Fatalf("Append: %v", err)
+			}
+			if err := twoStep.AddLog(buf); err != nil {
+				t.Fatalf("AddLog: %v", err)
+			}
+			direct := NewFrameRFC6587NonTransparent('\n')
+			if err := tc.add(direct, tc.msg); err != nil {
+				t.Fatalf("AddLogRFC*: %v", err)
+			}
+			if !bytes.Equal(direct.Bytes(), twoStep.Bytes()) {
+				t.Errorf("framed bytes differ:\n  direct:   %q\n  two-step: %q",
+					direct.Bytes(), twoStep.Bytes())
+			}
+		})
+	}
+}
+
+// TestFrameRFC6587_AddLogRFC5424_DigitBoundaries checks the in-place memmove
+// + decimal-width logic at every decimal-width boundary. Body length is
+// padded so the framed message lands at sizes that cross digit boundaries.
+func TestFrameRFC6587_AddLogRFC5424_DigitBoundaries(t *testing.T) {
+	// Measure header overhead by formatting with an empty body, then build
+	// bodies that put total length at each boundary.
+	headerBuf, err := AppendRFC5424(nil, basicMessage5424())
+	if err != nil {
+		t.Fatal(err)
+	}
+	headerLen := len(headerBuf) - len("hi") // strip the default "hi" body
+
+	for _, target := range []int{9, 10, 99, 100, 999, 1000, 9999, 10000} {
+		t.Run(fmt.Sprintf("len=%d", target), func(t *testing.T) {
+			bodyLen := target - headerLen
+			if bodyLen < 1 {
+				t.Skipf("header already %d ≥ target %d", headerLen, target)
+			}
+			m := basicMessage5424()
+			m.Message = strings.Repeat("x", bodyLen)
+
+			direct := NewFrameRFC6587()
+			if err := direct.AddLogRFC5424(m); err != nil {
+				t.Fatal(err)
+			}
+			twoStep := NewFrameRFC6587()
+			buf, _ := AppendRFC5424(nil, m)
+			_ = twoStep.AddLog(buf)
+			if !bytes.Equal(direct.Bytes(), twoStep.Bytes()) {
+				t.Errorf("at target=%d (msgLen=%d):\n  direct:   %q\n  two-step: %q",
+					target, len(buf), direct.Bytes(), twoStep.Bytes())
+			}
+		})
+	}
+}
+
+func TestFrameRFC6587_AddLogRFCDirect_RevertsOnError(t *testing.T) {
+	f := NewFrameRFC6587()
+	if err := f.AddLogRFC5424(basicMessage5424()); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := append([]byte(nil), f.Bytes()...)
+
+	// Bad message: facility out of range.
+	bad := basicMessage5424()
+	bad.Facility = 99
+	if err := f.AddLogRFC5424(bad); err == nil {
+		t.Fatal("expected error")
+	}
+	if !bytes.Equal(f.Bytes(), snapshot) {
+		t.Errorf("buffer mutated on error:\n  before: %q\n  after:  %q", snapshot, f.Bytes())
+	}
+
+	// Bad message: RFC 3164 with non-alphanumeric TAG.
+	bad3164 := basicMessage3164()
+	bad3164.AppName = "bad-tag"
+	if err := f.AddLogRFC3164(bad3164); err == nil {
+		t.Fatal("expected error")
+	}
+	if !bytes.Equal(f.Bytes(), snapshot) {
+		t.Errorf("buffer mutated on 3164 error:\n  before: %q\n  after:  %q", snapshot, f.Bytes())
+	}
+}
+
+func TestFrameRFC6587NonTransparent_AddLogRFCDirect_RevertsOnError(t *testing.T) {
+	f := NewFrameRFC6587NonTransparent('\n')
+	if err := f.AddLogRFC5424(basicMessage5424()); err != nil {
+		t.Fatal(err)
+	}
+	snapshot := append([]byte(nil), f.Bytes()...)
+
+	bad := basicMessage5424()
+	bad.Severity = 99
+	if err := f.AddLogRFC5424(bad); err == nil {
+		t.Fatal("expected error")
+	}
+	if !bytes.Equal(f.Bytes(), snapshot) {
+		t.Errorf("buffer mutated on error:\n  before: %q\n  after:  %q", snapshot, f.Bytes())
+	}
+
+	// Trailer-in-message must also revert.
+	trailerInMsg := basicMessage5424()
+	trailerInMsg.Message = "first\nsecond" // contains LF trailer
+	if err := f.AddLogRFC5424(trailerInMsg); err == nil {
+		t.Fatal("expected trailer-byte error")
+	}
+	if !bytes.Equal(f.Bytes(), snapshot) {
+		t.Errorf("buffer mutated on trailer-in-msg:\n  before: %q\n  after:  %q",
+			snapshot, f.Bytes())
+	}
+}
+
+func TestFrameRFC6587_AddLogRFCDirect_MixedRFCs(t *testing.T) {
+	// Both RFCs into a single frame, interleaved with raw AddLog. Verify
+	// total bytes match the explicit two-step construction.
+	m3164 := basicMessage3164()
+	m5424 := basicMessage5424()
+
+	direct := NewFrameRFC6587()
+	if err := direct.AddLogRFC3164(m3164); err != nil {
+		t.Fatal(err)
+	}
+	if err := direct.AddLogRFC5424(m5424); err != nil {
+		t.Fatal(err)
+	}
+	if err := direct.AddLog([]byte("raw")); err != nil {
+		t.Fatal(err)
+	}
+
+	twoStep := NewFrameRFC6587()
+	b1, _ := AppendRFC3164(nil, m3164)
+	_ = twoStep.AddLog(b1)
+	b2, _ := AppendRFC5424(nil, m5424)
+	_ = twoStep.AddLog(b2)
+	_ = twoStep.AddLog([]byte("raw"))
+
+	if !bytes.Equal(direct.Bytes(), twoStep.Bytes()) {
+		t.Errorf("mixed bytes differ:\n  direct:   %q\n  two-step: %q",
+			direct.Bytes(), twoStep.Bytes())
+	}
+}
+
+func TestFrameRFC6587_NilReceiver_DirectMethods(t *testing.T) {
+	var f *FrameRFC6587
+	if err := f.AddLogRFC3164(basicMessage3164()); err == nil {
+		t.Error("nil receiver should error")
+	}
+	if err := f.AddLogRFC5424(basicMessage5424()); err == nil {
+		t.Error("nil receiver should error")
+	}
+}
+
+func TestFrameRFC6587NonTransparent_NilReceiver_DirectMethods(t *testing.T) {
+	var f *FrameRFC6587NonTransparent
+	if err := f.AddLogRFC3164(basicMessage3164()); err == nil {
+		t.Error("nil receiver should error")
+	}
+	if err := f.AddLogRFC5424(basicMessage5424()); err == nil {
+		t.Error("nil receiver should error")
+	}
+}
+
+// -----------------------------------------------------------------------------
 // Complex / freeform message bodies
 //
 // RFC 5424 §6.4 defines MSG-ANY as *OCTET, so any bytes are legal in MSG as
@@ -1408,6 +1629,189 @@ func BenchmarkPipelineRFC5424_Octet(b *testing.B) {
 			b.Fatal(err)
 		}
 		if err := f.AddLog(buf); err != nil {
+			b.Fatal(err)
+		}
+		if f.Size() > 1<<20 {
+			f.Reset()
+		}
+	}
+}
+
+func BenchmarkPipelineRFC3164_Octet(b *testing.B) {
+	m := &Message{
+		Facility:  FacLocal4,
+		Severity:  SevNotice,
+		Timestamp: time.Date(2026, time.October, 11, 22, 14, 15, 0, time.UTC),
+		Hostname:  "mymachine.example.com",
+		AppName:   "myapp",
+		ProcID:    "1234",
+		Message:   "user login succeeded for alice from 192.0.2.7",
+	}
+	buf := make([]byte, 0, 256)
+	f := NewFrameRFC6587()
+	b.ReportAllocs()
+	for b.Loop() {
+		buf = buf[:0]
+		var err error
+		buf, err = AppendRFC3164(buf, m)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if err := f.AddLog(buf); err != nil {
+			b.Fatal(err)
+		}
+		if f.Size() > 1<<20 {
+			f.Reset()
+		}
+	}
+}
+
+func BenchmarkFrameRFC6587_AddLogRFC3164(b *testing.B) {
+	m := &Message{
+		Facility:  FacLocal4,
+		Severity:  SevNotice,
+		Timestamp: time.Date(2026, time.October, 11, 22, 14, 15, 0, time.UTC),
+		Hostname:  "mymachine.example.com",
+		AppName:   "myapp",
+		ProcID:    "1234",
+		Message:   "user login succeeded for alice from 192.0.2.7",
+	}
+	f := NewFrameRFC6587()
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := f.AddLogRFC3164(m); err != nil {
+			b.Fatal(err)
+		}
+		if f.Size() > 1<<20 {
+			f.Reset()
+		}
+	}
+}
+
+func BenchmarkPipelineRFC3164_NonTransp(b *testing.B) {
+	m := &Message{
+		Facility:  FacLocal4,
+		Severity:  SevNotice,
+		Timestamp: time.Date(2026, time.October, 11, 22, 14, 15, 0, time.UTC),
+		Hostname:  "mymachine.example.com",
+		AppName:   "myapp",
+		ProcID:    "1234",
+		Message:   "user login succeeded for alice from 192.0.2.7",
+	}
+	buf := make([]byte, 0, 256)
+	f := NewFrameRFC6587NonTransparent('\n')
+	b.ReportAllocs()
+	for b.Loop() {
+		buf = buf[:0]
+		var err error
+		buf, err = AppendRFC3164(buf, m)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if err := f.AddLog(buf); err != nil {
+			b.Fatal(err)
+		}
+		if f.Size() > 1<<20 {
+			f.Reset()
+		}
+	}
+}
+
+func BenchmarkFrameRFC6587NonTransparent_AddLogRFC3164(b *testing.B) {
+	m := &Message{
+		Facility:  FacLocal4,
+		Severity:  SevNotice,
+		Timestamp: time.Date(2026, time.October, 11, 22, 14, 15, 0, time.UTC),
+		Hostname:  "mymachine.example.com",
+		AppName:   "myapp",
+		ProcID:    "1234",
+		Message:   "user login succeeded for alice from 192.0.2.7",
+	}
+	f := NewFrameRFC6587NonTransparent('\n')
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := f.AddLogRFC3164(m); err != nil {
+			b.Fatal(err)
+		}
+		if f.Size() > 1<<20 {
+			f.Reset()
+		}
+	}
+}
+
+// BenchmarkFrameRFC6587_AddLogRFC5424 measures the direct in-place path
+// (no caller-side scratch buffer) for octet-counted framing. Compare
+// against BenchmarkPipelineRFC5424_Octet.
+func BenchmarkFrameRFC6587_AddLogRFC5424(b *testing.B) {
+	m := &Message{
+		Facility:  FacLocal4,
+		Severity:  SevNotice,
+		Timestamp: time.Date(2026, time.October, 11, 22, 14, 15, 3000000, time.UTC),
+		Hostname:  "mymachine.example.com",
+		AppName:   "myapp",
+		ProcID:    "1234",
+		MsgID:     "ID47",
+		Message:   "user login succeeded for alice from 192.0.2.7",
+	}
+	f := NewFrameRFC6587()
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := f.AddLogRFC5424(m); err != nil {
+			b.Fatal(err)
+		}
+		if f.Size() > 1<<20 {
+			f.Reset()
+		}
+	}
+}
+
+// BenchmarkPipelineRFC5424_NonTransp is the non-transparent counterpart of
+// BenchmarkPipelineRFC5424_Octet.
+func BenchmarkPipelineRFC5424_NonTransp(b *testing.B) {
+	m := &Message{
+		Facility:  FacLocal4,
+		Severity:  SevNotice,
+		Timestamp: time.Date(2026, time.October, 11, 22, 14, 15, 3000000, time.UTC),
+		Hostname:  "mymachine.example.com",
+		AppName:   "myapp",
+		ProcID:    "1234",
+		MsgID:     "ID47",
+		Message:   "user login succeeded for alice from 192.0.2.7",
+	}
+	buf := make([]byte, 0, 256)
+	f := NewFrameRFC6587NonTransparent('\n')
+	b.ReportAllocs()
+	for b.Loop() {
+		buf = buf[:0]
+		var err error
+		buf, err = AppendRFC5424(buf, m)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if err := f.AddLog(buf); err != nil {
+			b.Fatal(err)
+		}
+		if f.Size() > 1<<20 {
+			f.Reset()
+		}
+	}
+}
+
+func BenchmarkFrameRFC6587NonTransparent_AddLogRFC5424(b *testing.B) {
+	m := &Message{
+		Facility:  FacLocal4,
+		Severity:  SevNotice,
+		Timestamp: time.Date(2026, time.October, 11, 22, 14, 15, 3000000, time.UTC),
+		Hostname:  "mymachine.example.com",
+		AppName:   "myapp",
+		ProcID:    "1234",
+		MsgID:     "ID47",
+		Message:   "user login succeeded for alice from 192.0.2.7",
+	}
+	f := NewFrameRFC6587NonTransparent('\n')
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := f.AddLogRFC5424(m); err != nil {
 			b.Fatal(err)
 		}
 		if f.Size() > 1<<20 {
