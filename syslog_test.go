@@ -295,6 +295,21 @@ func TestFormatRFC5424_RejectsBadInput(t *testing.T) {
 		{"SD-ID with ]", func(m *Message) {
 			m.StructuredData = []SDElement{{ID: "a]b"}}
 		}},
+		{"SD-ID @ with empty name", func(m *Message) {
+			m.StructuredData = []SDElement{{ID: "@32473"}}
+		}},
+		{"SD-ID @ with empty number", func(m *Message) {
+			m.StructuredData = []SDElement{{ID: "name@"}}
+		}},
+		{"SD-ID @ with space in name", func(m *Message) {
+			m.StructuredData = []SDElement{{ID: "bad name@1"}}
+		}},
+		{"SD-ID @ with space in number", func(m *Message) {
+			m.StructuredData = []SDElement{{ID: "n@bad 1"}}
+		}},
+		{"SD-ID with multiple @", func(m *Message) {
+			m.StructuredData = []SDElement{{ID: "a@b@1"}}
+		}},
 		{"duplicate SD-ID", func(m *Message) {
 			m.StructuredData = []SDElement{{ID: "x@1"}, {ID: "x@1"}}
 		}},
