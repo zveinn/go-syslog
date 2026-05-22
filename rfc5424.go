@@ -104,6 +104,58 @@ func AppendRFC5424(dst []byte, m *Message) ([]byte, error) {
 	return dst, nil
 }
 
+// ValidateHostnameRFC5424 reports whether s is a valid RFC 5424 §6.2.4
+// HOSTNAME: either empty (NILVALUE "-" on the wire) or 1-255
+// PRINTUSASCII octets.
+func ValidateHostnameRFC5424(s string) error {
+	_, err := nilOrPrintUSASCII("HOSTNAME", s, 255)
+	return err
+}
+
+// ValidateAppNameRFC5424 reports whether s is a valid RFC 5424 §6.2.5
+// APP-NAME: either empty (encoded as NILVALUE "-" on the wire) or 1-48
+// PRINTUSASCII octets (%d33-126). Hyphens, dots, underscores etc. are
+// allowed — only HTAB/SPACE and bytes outside [33,126] are rejected.
+func ValidateAppNameRFC5424(s string) error {
+	_, err := nilOrPrintUSASCII("APP-NAME", s, 48)
+	return err
+}
+
+// ValidateProcIDRFC5424 reports whether s is a valid RFC 5424 §6.2.6
+// PROCID: either empty (NILVALUE) or 1-128 PRINTUSASCII octets.
+func ValidateProcIDRFC5424(s string) error {
+	_, err := nilOrPrintUSASCII("PROCID", s, 128)
+	return err
+}
+
+// ValidateMsgIDRFC5424 reports whether s is a valid RFC 5424 §6.2.7
+// MSGID: either empty (NILVALUE) or 1-32 PRINTUSASCII octets.
+func ValidateMsgIDRFC5424(s string) error {
+	_, err := nilOrPrintUSASCII("MSGID", s, 32)
+	return err
+}
+
+// ValidateSDID reports whether s is a valid RFC 5424 §6.3.2 SD-ID:
+// 1-32 SD-NAME octets (PRINTUSASCII excluding '=', SP, ']', '"').
+func ValidateSDID(s string) error {
+	return validateSDName(s, "SD-ID")
+}
+
+// ValidateParamName reports whether s is a valid RFC 5424 §6.3.3
+// PARAM-NAME. Same rules as SD-ID: 1-32 SD-NAME octets.
+func ValidateParamName(s string) error {
+	return validateSDName(s, "PARAM-NAME")
+}
+
+// ValidateStructuredData reports whether sd as a whole is a valid RFC
+// 5424 STRUCTURED-DATA list: every SD-ID and every PARAM-NAME passes
+// the SD-NAME rule, SD-IDs are unique within the list, PARAM-NAMEs are
+// unique within their element, and every PARAM-VALUE is valid UTF-8.
+// An empty or nil slice is valid (encoded as NILVALUE on the wire).
+func ValidateStructuredData(sd []SDElement) error {
+	return validateSDList(sd)
+}
+
 // nilOrPrintUSASCII returns "-" for empty fields, otherwise enforces that
 // the value is 1*nnnPRINTUSASCII (%d33-126).
 func nilOrPrintUSASCII(field, s string, max int) (string, error) {

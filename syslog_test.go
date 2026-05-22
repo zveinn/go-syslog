@@ -1145,6 +1145,441 @@ func TestRFC5424_FieldLengthBoundaries(t *testing.T) {
 	}
 }
 
+func TestValidateAppNameRFC3164(t *testing.T) {
+	cases := []struct {
+		name    string
+		s       string
+		wantErr bool
+	}{
+		{"empty", "", true},          // §4.1.3: TAG required, no NILVALUE
+		{"single", "a", false},       // smallest valid
+		{"digits", "12345", false},   // digits are alphanumeric
+		{"mixed", "App1Tag", false},  // mixed case ok
+		{"at-32", strings.Repeat("a", 32), false},   // §4.1.3: max
+		{"over-32", strings.Repeat("a", 33), true},  // one past max
+		{"hyphen", "a-b", true},      // - terminates TAG on receivers
+		{"underscore", "a_b", true},  // not alphanumeric
+		{"dot", "app.x", true},
+		{"colon", "a:b", true},
+		{"space", "a b", true},
+		{"slash", "a/b", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateAppNameRFC3164(tc.s)
+			if tc.wantErr && err == nil {
+				t.Errorf("ValidateAppNameRFC3164(%q): want error, got nil", tc.s)
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("ValidateAppNameRFC3164(%q): unexpected error: %v", tc.s, err)
+			}
+		})
+	}
+}
+
+func TestValidateAppNameRFC5424(t *testing.T) {
+	cases := []struct {
+		name    string
+		s       string
+		wantErr bool
+	}{
+		{"empty", "", false},         // §6.2.5: NILVALUE allowed
+		{"single", "a", false},       // smallest non-NILVALUE
+		{"hyphen", "minio-audit", false},   // PRINTUSASCII allows -
+		{"dot", "app.name", false},
+		{"underscore", "app_name", false},
+		{"colon", "a:b", false},
+		{"slash", "a/b", false},
+		{"all-special", `!"#$%&'()*+,-./[\]^_{|}~`, false}, // all PRINTUSASCII
+		{"at-48", strings.Repeat("a", 48), false},  // §6.2.5: max
+		{"over-48", strings.Repeat("a", 49), true}, // one past max
+		{"space", "a b", true},       // 0x20 not in PRINTUSASCII
+		{"tab", "a\tb", true},        // 0x09
+		{"del", "a\x7fb", true},      // 0x7F (DEL)
+		{"high-bit", "a\x80b", true}, // above 7-bit ASCII
+		{"nul", "a\x00b", true},      // control char
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateAppNameRFC5424(tc.s)
+			if tc.wantErr && err == nil {
+				t.Errorf("ValidateAppNameRFC5424(%q): want error, got nil", tc.s)
+			}
+			if !tc.wantErr && err != nil {
+				t.Errorf("ValidateAppNameRFC5424(%q): unexpected error: %v", tc.s, err)
+			}
+		})
+	}
+}
+
+func TestValidateHostnameRFC3164(t *testing.T) {
+	cases := []struct {
+		name    string
+		s       string
+		wantErr bool
+	}{
+		{"empty", "", true},                  // §4.1.2: required
+		{"single", "h", false},
+		{"fqdn", "host.example.com", false},
+		{"ipv4", "192.0.2.1", false},
+		{"with-space", "a b", true},
+		{"with-tab", "a\tb", true},
+		{"with-lf", "a\nb", true},
+		{"with-cr", "a\rb", true},
+		{"with-nul", "a\x00b", true},
+		{"high-bit", "a\x80b", true},
+		{"del", "a\x7fb", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateHostnameRFC3164(tc.s)
+			if tc.wantErr != (err != nil) {
+				t.Errorf("ValidateHostnameRFC3164(%q): wantErr=%v, gotErr=%v", tc.s, tc.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestValidateProcIDRFC3164(t *testing.T) {
+	cases := []struct {
+		name    string
+		s       string
+		wantErr bool
+	}{
+		{"empty", "", false}, // empty ProcID is allowed (no [PID] emitted)
+		{"numeric", "1234", false},
+		{"alphanumeric", "worker-3", false}, // hyphens ok in ProcID
+		{"with-bracket-open", "1[2", true},
+		{"with-bracket-close", "1]2", true},
+		{"with-space", "1 2", true},
+		{"with-tab", "1\t2", true},
+		{"with-lf", "1\n2", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateProcIDRFC3164(tc.s)
+			if tc.wantErr != (err != nil) {
+				t.Errorf("ValidateProcIDRFC3164(%q): wantErr=%v, gotErr=%v", tc.s, tc.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestValidateHostnameRFC5424(t *testing.T) {
+	cases := []struct {
+		name    string
+		s       string
+		wantErr bool
+	}{
+		{"empty/NILVALUE", "", false}, // §6.2.4: NILVALUE allowed
+		{"single", "h", false},
+		{"fqdn", "host.example.com", false},
+		{"at-255", strings.Repeat("h", 255), false},
+		{"over-255", strings.Repeat("h", 256), true},
+		{"with-space", "a b", true},
+		{"high-bit", "a\x80b", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateHostnameRFC5424(tc.s)
+			if tc.wantErr != (err != nil) {
+				t.Errorf("ValidateHostnameRFC5424(%q): wantErr=%v, gotErr=%v", tc.s, tc.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestValidateProcIDRFC5424(t *testing.T) {
+	cases := []struct {
+		name    string
+		s       string
+		wantErr bool
+	}{
+		{"empty/NILVALUE", "", false},
+		{"numeric", "1234", false},
+		{"hyphenated", "worker-3", false},
+		{"at-128", strings.Repeat("p", 128), false},
+		{"over-128", strings.Repeat("p", 129), true},
+		{"with-space", "a b", true},
+		{"del", "a\x7fb", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateProcIDRFC5424(tc.s)
+			if tc.wantErr != (err != nil) {
+				t.Errorf("ValidateProcIDRFC5424(%q): wantErr=%v, gotErr=%v", tc.s, tc.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestValidateMsgIDRFC5424(t *testing.T) {
+	cases := []struct {
+		name    string
+		s       string
+		wantErr bool
+	}{
+		{"empty/NILVALUE", "", false},
+		{"id", "ID47", false},
+		{"at-32", strings.Repeat("m", 32), false},
+		{"over-32", strings.Repeat("m", 33), true},
+		{"with-space", "a b", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateMsgIDRFC5424(tc.s)
+			if tc.wantErr != (err != nil) {
+				t.Errorf("ValidateMsgIDRFC5424(%q): wantErr=%v, gotErr=%v", tc.s, tc.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestValidateSDID(t *testing.T) {
+	cases := []struct {
+		name    string
+		s       string
+		wantErr bool
+	}{
+		{"empty", "", true}, // §6.3.2: SD-ID required, no NILVALUE
+		{"single", "a", false},
+		{"with-at", "exampleSDID@32473", false}, // canonical form
+		{"with-dot", "vendor.sub", false},
+		{"with-hyphen", "id-1", false},
+		{"at-32", strings.Repeat("a", 32), false},
+		{"over-32", strings.Repeat("a", 33), true},
+		{"with-equals", "a=b", true},   // §6.3.3: excluded
+		{"with-space", "a b", true},    // §6.3.3: excluded
+		{"with-bracket", "a]b", true},  // §6.3.3: excluded
+		{"with-quote", `a"b`, true},    // §6.3.3: excluded
+		{"high-bit", "a\x80b", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := ValidateSDID(tc.s)
+			if tc.wantErr != (err != nil) {
+				t.Errorf("ValidateSDID(%q): wantErr=%v, gotErr=%v", tc.s, tc.wantErr, err)
+			}
+		})
+	}
+}
+
+func TestValidateParamName(t *testing.T) {
+	// Same rules as SD-ID — single sanity check + the discriminating cases.
+	if err := ValidateParamName("iut"); err != nil {
+		t.Errorf("simple name: %v", err)
+	}
+	if err := ValidateParamName(""); err == nil {
+		t.Error("empty must be rejected")
+	}
+	if err := ValidateParamName("a=b"); err == nil {
+		t.Error("equals must be rejected")
+	}
+}
+
+func TestValidateStructuredData(t *testing.T) {
+	t.Run("nil/empty/NILVALUE", func(t *testing.T) {
+		if err := ValidateStructuredData(nil); err != nil {
+			t.Errorf("nil: %v", err)
+		}
+		if err := ValidateStructuredData([]SDElement{}); err != nil {
+			t.Errorf("empty: %v", err)
+		}
+	})
+	t.Run("valid", func(t *testing.T) {
+		err := ValidateStructuredData([]SDElement{{
+			ID: "test@32473",
+			Params: []SDParam{
+				{Name: "k", Value: "v"},
+				{Name: "k2", Value: "v2"},
+			},
+		}})
+		if err != nil {
+			t.Errorf("valid SD rejected: %v", err)
+		}
+	})
+	t.Run("duplicate-SD-ID", func(t *testing.T) {
+		err := ValidateStructuredData([]SDElement{
+			{ID: "x@1"},
+			{ID: "x@1"},
+		})
+		if err == nil {
+			t.Error("duplicate SD-IDs should be rejected")
+		}
+	})
+	t.Run("bad-SD-ID", func(t *testing.T) {
+		err := ValidateStructuredData([]SDElement{{ID: "bad id"}})
+		if err == nil {
+			t.Error("SD-ID with space should be rejected")
+		}
+	})
+	t.Run("duplicate-PARAM-NAME", func(t *testing.T) {
+		err := ValidateStructuredData([]SDElement{{
+			ID: "x@1",
+			Params: []SDParam{{Name: "k", Value: "1"}, {Name: "k", Value: "2"}},
+		}})
+		if err == nil {
+			t.Error("duplicate PARAM-NAME should be rejected")
+		}
+	})
+	t.Run("invalid-utf8-value", func(t *testing.T) {
+		err := ValidateStructuredData([]SDElement{{
+			ID:     "x@1",
+			Params: []SDParam{{Name: "k", Value: "\xff\xfe"}}, // invalid UTF-8
+		}})
+		if err == nil {
+			t.Error("invalid UTF-8 PARAM-VALUE should be rejected")
+		}
+	})
+}
+
+func TestValidateMessageRFC3164(t *testing.T) {
+	if err := ValidateMessageRFC3164(nil); err == nil {
+		t.Error("nil message must error")
+	}
+	if err := ValidateMessageRFC3164(basicMessage3164()); err != nil {
+		t.Errorf("basicMessage3164 must validate: %v", err)
+	}
+	bad := basicMessage3164()
+	bad.AppName = "bad-tag"
+	if err := ValidateMessageRFC3164(bad); err == nil {
+		t.Error("bad TAG must error")
+	}
+	bad2 := basicMessage3164()
+	bad2.Hostname = ""
+	if err := ValidateMessageRFC3164(bad2); err == nil {
+		t.Error("missing hostname must error")
+	}
+	bad3 := basicMessage3164()
+	bad3.Facility = 99
+	if err := ValidateMessageRFC3164(bad3); err == nil {
+		t.Error("bad facility must error")
+	}
+}
+
+func TestValidateMessageRFC5424(t *testing.T) {
+	if err := ValidateMessageRFC5424(nil); err == nil {
+		t.Error("nil message must error")
+	}
+	if err := ValidateMessageRFC5424(basicMessage5424()); err != nil {
+		t.Errorf("basicMessage5424 must validate: %v", err)
+	}
+	bad := basicMessage5424()
+	bad.AppName = "way too long " + strings.Repeat("x", 64)
+	if err := ValidateMessageRFC5424(bad); err == nil {
+		t.Error("over-length APP-NAME must error")
+	}
+	bad2 := basicMessage5424()
+	bad2.StructuredData = []SDElement{{ID: "bad id"}}
+	if err := ValidateMessageRFC5424(bad2); err == nil {
+		t.Error("bad SD-ID must error")
+	}
+}
+
+// ValidateAppNameRFC* must agree with what AppendRFC*  actually accepts.
+// Any divergence between the public validator and the format function is
+// a bug — this test pins them together for both RFCs.
+func TestValidateAppName_AgreesWithFormat(t *testing.T) {
+	probes := []string{
+		"", "a", "App1", "app-1", "app_1", "a:b", "a/b", "a b",
+		strings.Repeat("a", 32),
+		strings.Repeat("a", 33),
+		strings.Repeat("a", 48),
+		strings.Repeat("a", 49),
+		"\x7f", "\x00",
+	}
+	for _, s := range probes {
+		t.Run("3164/"+s, func(t *testing.T) {
+			vErr := ValidateAppNameRFC3164(s) != nil
+			m := basicMessage3164()
+			m.AppName = s
+			_, fErr := AppendRFC3164(nil, m)
+			fErrs := fErr != nil
+			if vErr != fErrs {
+				t.Errorf("ValidateAppNameRFC3164(%q) err=%v but AppendRFC3164 err=%v",
+					s, vErr, fErrs)
+			}
+		})
+		t.Run("5424/"+s, func(t *testing.T) {
+			vErr := ValidateAppNameRFC5424(s) != nil
+			m := basicMessage5424()
+			m.AppName = s
+			_, fErr := AppendRFC5424(nil, m)
+			fErrs := fErr != nil
+			if vErr != fErrs {
+				t.Errorf("ValidateAppNameRFC5424(%q) err=%v but AppendRFC5424 err=%v",
+					s, vErr, fErrs)
+			}
+		})
+	}
+}
+
+// ValidateMessageRFC* must accept exactly the messages AppendRFC* accepts.
+// Probes the cross-product of one bad value per field against both RFCs.
+func TestValidateMessage_AgreesWithFormat(t *testing.T) {
+	mut3164 := []struct {
+		name string
+		mut  func(*Message)
+	}{
+		{"baseline", func(*Message) {}},
+		{"bad-facility", func(m *Message) { m.Facility = 99 }},
+		{"bad-severity", func(m *Message) { m.Severity = 99 }},
+		{"empty-hostname", func(m *Message) { m.Hostname = "" }},
+		{"hostname-space", func(m *Message) { m.Hostname = "a b" }},
+		{"empty-appname", func(m *Message) { m.AppName = "" }},
+		{"appname-hyphen", func(m *Message) { m.AppName = "a-b" }},
+		{"appname-too-long", func(m *Message) { m.AppName = strings.Repeat("a", 33) }},
+		{"procid-bracket", func(m *Message) { m.ProcID = "1[2" }},
+	}
+	for _, tc := range mut3164 {
+		t.Run("3164/"+tc.name, func(t *testing.T) {
+			m := basicMessage3164()
+			tc.mut(m)
+			vErr := ValidateMessageRFC3164(m) != nil
+			_, fErr := AppendRFC3164(nil, m)
+			fErrs := fErr != nil
+			if vErr != fErrs {
+				t.Errorf("validator err=%v but formatter err=%v", vErr, fErrs)
+			}
+		})
+	}
+
+	mut5424 := []struct {
+		name string
+		mut  func(*Message)
+	}{
+		{"baseline", func(*Message) {}},
+		{"bad-facility", func(m *Message) { m.Facility = 99 }},
+		{"hostname-too-long", func(m *Message) { m.Hostname = strings.Repeat("h", 256) }},
+		{"hostname-space", func(m *Message) { m.Hostname = "a b" }},
+		{"appname-too-long", func(m *Message) { m.AppName = strings.Repeat("a", 49) }},
+		{"procid-too-long", func(m *Message) { m.ProcID = strings.Repeat("p", 129) }},
+		{"msgid-too-long", func(m *Message) { m.MsgID = strings.Repeat("m", 33) }},
+		{"sd-id-bad", func(m *Message) { m.StructuredData = []SDElement{{ID: "bad id"}} }},
+		{"sd-id-duplicate", func(m *Message) {
+			m.StructuredData = []SDElement{{ID: "x@1"}, {ID: "x@1"}}
+		}},
+		{"sd-param-bad-utf8", func(m *Message) {
+			m.StructuredData = []SDElement{{
+				ID:     "x@1",
+				Params: []SDParam{{Name: "k", Value: "\xff"}},
+			}}
+		}},
+	}
+	for _, tc := range mut5424 {
+		t.Run("5424/"+tc.name, func(t *testing.T) {
+			m := basicMessage5424()
+			tc.mut(m)
+			vErr := ValidateMessageRFC5424(m) != nil
+			_, fErr := AppendRFC5424(nil, m)
+			fErrs := fErr != nil
+			if vErr != fErrs {
+				t.Errorf("validator err=%v but formatter err=%v", vErr, fErrs)
+			}
+		})
+	}
+}
+
 func TestRFC5424_SDNameLengthBoundaries(t *testing.T) {
 	t.Run("SD-ID/at-limit", func(t *testing.T) {
 		m := basicMessage5424()
@@ -1911,6 +2346,140 @@ func BenchmarkFrameRFC6587NonTransparent_AddLogRFC5424(b *testing.B) {
 		}
 		if f.Size() > 1<<20 {
 			f.Reset()
+		}
+	}
+}
+
+func BenchmarkValidateHostnameRFC3164(b *testing.B) {
+	const s = "host.example.com"
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := ValidateHostnameRFC3164(s); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkValidateProcIDRFC3164(b *testing.B) {
+	const s = "worker-3"
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := ValidateProcIDRFC3164(s); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkValidateAppNameRFC3164(b *testing.B) {
+	const s = "myapp01"
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := ValidateAppNameRFC3164(s); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkValidateHostnameRFC5424(b *testing.B) {
+	const s = "mymachine.example.com"
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := ValidateHostnameRFC5424(s); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkValidateAppNameRFC5424(b *testing.B) {
+	const s = "minio-audit"
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := ValidateAppNameRFC5424(s); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkValidateProcIDRFC5424(b *testing.B) {
+	const s = "1234"
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := ValidateProcIDRFC5424(s); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkValidateMsgIDRFC5424(b *testing.B) {
+	const s = "ID47"
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := ValidateMsgIDRFC5424(s); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkValidateSDID(b *testing.B) {
+	const s = "exampleSDID@32473"
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := ValidateSDID(s); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkValidateStructuredData(b *testing.B) {
+	sd := []SDElement{{
+		ID: "exampleSDID@32473",
+		Params: []SDParam{
+			{Name: "iut", Value: "3"},
+			{Name: "eventSource", Value: "Application"},
+			{Name: "eventID", Value: "1011"},
+		},
+	}}
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := ValidateStructuredData(sd); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkValidateMessageRFC3164(b *testing.B) {
+	m := basicMessage3164()
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := ValidateMessageRFC3164(m); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkValidateMessageRFC5424(b *testing.B) {
+	m := &Message{
+		Facility:  FacLocal4,
+		Severity:  SevNotice,
+		Timestamp: time.Date(2026, time.October, 11, 22, 14, 15, 3000000, time.UTC),
+		Hostname:  "mymachine.example.com",
+		AppName:   "myapp",
+		ProcID:    "1234",
+		MsgID:     "ID47",
+		StructuredData: []SDElement{{
+			ID: "exampleSDID@32473",
+			Params: []SDParam{
+				{Name: "iut", Value: "3"},
+				{Name: "eventSource", Value: "Application"},
+				{Name: "eventID", Value: "1011"},
+			},
+		}},
+		Message: "user login succeeded for alice from 192.0.2.7",
+	}
+	b.ReportAllocs()
+	for b.Loop() {
+		if err := ValidateMessageRFC5424(m); err != nil {
+			b.Fatal(err)
 		}
 	}
 }
