@@ -106,34 +106,34 @@ func main() {
 	nUDP3164 = sendUDPBatch(udp, expectF, "3164-udp",
 		corners3164("3164-udp"),
 		bulk3164(bulkPerCategory, "3164-udp"),
-		syslog.AppendRFC3164)
+		syslog.AppendRFC3164, syslog.ValidateMessageRFC3164)
 
 	nUDP5424 = sendUDPBatch(udp, expectF, "5424-udp",
 		corners5424("5424-udp"),
 		bulk5424(bulkPerCategory, "5424-udp"),
-		syslog.AppendRFC5424)
+		syslog.AppendRFC5424, syslog.ValidateMessageRFC5424)
 
 	// ---- TCP via RFC 6587 §3.4.1 octet-counting -------------------------
 	nTCPOctet3164 = sendTCPOctet(tcpOctet, expectF,
 		corners3164("3164-tcp-octet"),
 		bulk3164(bulkPerCategory, "3164-tcp-octet"),
-		syslog.AppendRFC3164)
+		syslog.AppendRFC3164, syslog.ValidateMessageRFC3164)
 
 	nTCPOctet5424 = sendTCPOctet(tcpOctet, expectF,
 		corners5424("5424-tcp-octet"),
 		bulk5424(bulkPerCategory, "5424-tcp-octet"),
-		syslog.AppendRFC5424)
+		syslog.AppendRFC5424, syslog.ValidateMessageRFC5424)
 
 	// ---- TCP via RFC 6587 §3.4.2 non-transparent (LF) -------------------
 	nTCPNonTransp3164 = sendTCPNonTransp(tcpNT, expectF,
 		corners3164("3164-tcp-nt"),
 		bulk3164(bulkPerCategory, "3164-tcp-nt"),
-		syslog.AppendRFC3164)
+		syslog.AppendRFC3164, syslog.ValidateMessageRFC3164)
 
 	nTCPNonTransp5424 = sendTCPNonTransp(tcpNT, expectF,
 		corners5424("5424-tcp-nt"),
 		bulk5424(bulkPerCategory, "5424-tcp-nt"),
-		syslog.AppendRFC5424)
+		syslog.AppendRFC5424, syslog.ValidateMessageRFC5424)
 
 	// ---- Large payloads over TCP (~10 KB each) -------------------------
 	// Stress-tests both framings with messages well above any UDP MTU. Also
@@ -143,21 +143,28 @@ func main() {
 	// These paths use the batch framer methods (FrameRFC6587.AddLogsRFC*)
 	// — one call per ~1k message chunk — so end-to-end byte-exact diff
 	// against rsyslog catches any wire-format divergence in the batch path.
+	// They also run ValidateMessageRFC* against the appender for every
+	// message in the corpus, so a divergence between the public validators
+	// and the format functions is caught before any network I/O.
 	nLargeOctet3164 = sendTCPOctetBatch(tcpOctet, expectF, "tcp/octet-large/3164",
 		bulkLarge3164(largePerCategory, "3164-tcp-octet-large"),
-		func(f *syslog.FrameRFC6587, msgs []*syslog.Message) error { return f.AddLogsRFC3164(msgs) })
+		func(f *syslog.FrameRFC6587, msgs []*syslog.Message) error { return f.AddLogsRFC3164(msgs) },
+		syslog.ValidateMessageRFC3164, syslog.AppendRFC3164)
 
 	nLargeOctet5424 = sendTCPOctetBatch(tcpOctet, expectF, "tcp/octet-large/5424",
 		bulkLarge5424(largePerCategory, "5424-tcp-octet-large"),
-		func(f *syslog.FrameRFC6587, msgs []*syslog.Message) error { return f.AddLogsRFC5424(msgs) })
+		func(f *syslog.FrameRFC6587, msgs []*syslog.Message) error { return f.AddLogsRFC5424(msgs) },
+		syslog.ValidateMessageRFC5424, syslog.AppendRFC5424)
 
 	nLargeNT3164 = sendTCPNonTranspBatch(tcpNT, expectF, "tcp/nt-large/3164",
 		bulkLarge3164(largePerCategory, "3164-tcp-nt-large"),
-		func(f *syslog.FrameRFC6587NonTransparent, msgs []*syslog.Message) error { return f.AddLogsRFC3164(msgs) })
+		func(f *syslog.FrameRFC6587NonTransparent, msgs []*syslog.Message) error { return f.AddLogsRFC3164(msgs) },
+		syslog.ValidateMessageRFC3164, syslog.AppendRFC3164)
 
 	nLargeNT5424 = sendTCPNonTranspBatch(tcpNT, expectF, "tcp/nt-large/5424",
 		bulkLarge5424(largePerCategory, "5424-tcp-nt-large"),
-		func(f *syslog.FrameRFC6587NonTransparent, msgs []*syslog.Message) error { return f.AddLogsRFC5424(msgs) })
+		func(f *syslog.FrameRFC6587NonTransparent, msgs []*syslog.Message) error { return f.AddLogsRFC5424(msgs) },
+		syslog.ValidateMessageRFC5424, syslog.AppendRFC5424)
 
 	total := nUDP3164 + nUDP5424 +
 		nTCPOctet3164 + nTCPOctet5424 +
@@ -245,6 +252,26 @@ func fmtCount(n uint64) string {
 // across messages, eliminating one allocation per message.
 type appender func(dst []byte, m *syslog.Message) ([]byte, error)
 
+// validator is the ValidateMessageRFC3164 / ValidateMessageRFC5424 signature.
+// Pairs with an appender; the agreement check below enforces that any
+// message accepted by the validator is also accepted by the formatter, and
+// vice versa, across the full test corpus.
+type validator func(*syslog.Message) error
+
+// assertValidatorAgreesWithAppender runs both on m and log.Fatals if they
+// disagree about acceptance. The byte-exact diff in run.sh already catches
+// formatter bugs; this catches validator/formatter rule drift.
+func assertValidatorAgreesWithAppender(label string, i int, m *syslog.Message,
+	val validator, app appender) {
+
+	vErr := val(m)
+	_, fErr := app(nil, m)
+	if (vErr == nil) != (fErr == nil) {
+		log.Fatalf("%s seq=%d: validator/appender disagree: validator=%v appender=%v",
+			label, i, vErr, fErr)
+	}
+}
+
 // forEach iterates corners and bulk in sequence without allocating a
 // combined slice (which is what `append(corners, bulk...)` would do).
 func forEach(corners, bulk []*syslog.Message, fn func(int, *syslog.Message)) {
@@ -260,11 +287,12 @@ func forEach(corners, bulk []*syslog.Message, fn func(int, *syslog.Message)) {
 }
 
 func sendUDPBatch(c net.Conn, expect *bufio.Writer, label string,
-	corners, bulk []*syslog.Message, app appender) int {
+	corners, bulk []*syslog.Message, app appender, val validator) int {
 
 	sent := 0
 	var buf []byte
 	forEach(corners, bulk, func(i int, m *syslog.Message) {
+		assertValidatorAgreesWithAppender(label, i, m, val, app)
 		buf = buf[:0]
 		var err error
 		buf, err = app(buf, m)
@@ -289,13 +317,14 @@ func sendUDPBatch(c net.Conn, expect *bufio.Writer, label string,
 }
 
 func sendTCPOctet(c net.Conn, expect *bufio.Writer,
-	corners, bulk []*syslog.Message, app appender) int {
+	corners, bulk []*syslog.Message, app appender, val validator) int {
 
 	sent := 0
 	var buf []byte
 	frame := syslog.NewFrameRFC6587()
 	const flushEvery = 1000
 	forEach(corners, bulk, func(i int, m *syslog.Message) {
+		assertValidatorAgreesWithAppender("tcp/octet", i, m, val, app)
 		buf = buf[:0]
 		var err error
 		buf, err = app(buf, m)
@@ -325,13 +354,14 @@ func sendTCPOctet(c net.Conn, expect *bufio.Writer,
 }
 
 func sendTCPNonTransp(c net.Conn, expect *bufio.Writer,
-	corners, bulk []*syslog.Message, app appender) int {
+	corners, bulk []*syslog.Message, app appender, val validator) int {
 
 	sent := 0
 	var buf []byte
 	frame := syslog.NewFrameRFC6587NonTransparent('\n')
 	const flushEvery = 1000
 	forEach(corners, bulk, func(i int, m *syslog.Message) {
+		assertValidatorAgreesWithAppender("tcp/nt", i, m, val, app)
 		buf = buf[:0]
 		var err error
 		buf, err = app(buf, m)
@@ -367,8 +397,12 @@ func sendTCPNonTransp(c net.Conn, expect *bufio.Writer,
 // diff against rsyslog.
 func sendTCPOctetBatch(c net.Conn, expect *bufio.Writer, label string,
 	msgs []*syslog.Message,
-	addBatchToFrame func(*syslog.FrameRFC6587, []*syslog.Message) error) int {
+	addBatchToFrame func(*syslog.FrameRFC6587, []*syslog.Message) error,
+	val validator, app appender) int {
 
+	for i, m := range msgs {
+		assertValidatorAgreesWithAppender(label, i, m, val, app)
+	}
 	const flushEvery = 1000
 	frame := syslog.NewFrameRFC6587()
 	sent := 0
@@ -412,8 +446,12 @@ func sendTCPOctetBatch(c net.Conn, expect *bufio.Writer, label string,
 // contain it, which is the same invariant the framer enforces.
 func sendTCPNonTranspBatch(c net.Conn, expect *bufio.Writer, label string,
 	msgs []*syslog.Message,
-	addBatchToFrame func(*syslog.FrameRFC6587NonTransparent, []*syslog.Message) error) int {
+	addBatchToFrame func(*syslog.FrameRFC6587NonTransparent, []*syslog.Message) error,
+	val validator, app appender) int {
 
+	for i, m := range msgs {
+		assertValidatorAgreesWithAppender(label, i, m, val, app)
+	}
 	const flushEvery = 1000
 	const trailer = '\n'
 	frame := syslog.NewFrameRFC6587NonTransparent(trailer)

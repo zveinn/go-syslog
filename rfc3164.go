@@ -50,32 +50,14 @@ func AppendRFC3164(dst []byte, m *Message) ([]byte, error) {
 		return dst, err
 	}
 
-	if m.Hostname == "" {
-		return dst, fmt.Errorf("syslog: RFC 3164 hostname is required")
+	if err := ValidateHostnameRFC3164(m.Hostname); err != nil {
+		return dst, err
 	}
-	if strings.ContainsAny(m.Hostname, " \t\n\r") {
-		return dst, fmt.Errorf("syslog: RFC 3164 hostname must not contain whitespace")
+	if err := ValidateAppNameRFC3164(m.AppName); err != nil {
+		return dst, err
 	}
-	for i := 0; i < len(m.Hostname); i++ {
-		if c := m.Hostname[i]; c < 33 || c > 126 {
-			return dst, fmt.Errorf("syslog: RFC 3164 hostname contains non-printable byte %#x", c)
-		}
-	}
-
-	if m.AppName == "" {
-		return dst, fmt.Errorf("syslog: RFC 3164 TAG (AppName) is required")
-	}
-	if len(m.AppName) > rfc3164TagMax {
-		return dst, fmt.Errorf("syslog: RFC 3164 TAG exceeds %d octets", rfc3164TagMax)
-	}
-	for i := 0; i < len(m.AppName); i++ {
-		if c := m.AppName[i]; !isAlphaNum(c) {
-			return dst, fmt.Errorf("syslog: RFC 3164 TAG must be alphanumeric (got %q)", c)
-		}
-	}
-
-	if strings.ContainsAny(m.ProcID, "][ \t\n\r") {
-		return dst, fmt.Errorf("syslog: RFC 3164 ProcID must not contain ']', '[', or whitespace")
+	if err := ValidateProcIDRFC3164(m.ProcID); err != nil {
+		return dst, err
 	}
 
 	ts := m.Timestamp
@@ -125,4 +107,54 @@ func AppendRFC3164(dst []byte, m *Message) ([]byte, error) {
 
 func isAlphaNum(c byte) bool {
 	return (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9')
+}
+
+// ValidateHostnameRFC3164 reports whether s is a valid RFC 3164 §4.1.2
+// HOSTNAME: required (no NILVALUE), printable ASCII (33-126), no
+// embedded whitespace. The RFC says HOSTNAME SHOULD NOT contain spaces;
+// this library enforces that as MUST since a space would break parsing.
+func ValidateHostnameRFC3164(s string) error {
+	if s == "" {
+		return fmt.Errorf("syslog: RFC 3164 hostname is required")
+	}
+	if strings.ContainsAny(s, " \t\n\r") {
+		return fmt.Errorf("syslog: RFC 3164 hostname must not contain whitespace")
+	}
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; c < 33 || c > 126 {
+			return fmt.Errorf("syslog: RFC 3164 hostname contains non-printable byte %#x", c)
+		}
+	}
+	return nil
+}
+
+// ValidateProcIDRFC3164 reports whether s is a valid ProcID for the BSD
+// "TAG[ProcID]:" convention. Empty is allowed (no ProcID emitted); other
+// values must not contain '[', ']', or whitespace because those would
+// break the [PID] framing on the wire. Not formally defined by RFC 3164
+// (the whole TAG[PID] form is a BSD convention, not RFC grammar).
+func ValidateProcIDRFC3164(s string) error {
+	if strings.ContainsAny(s, "][ \t\n\r") {
+		return fmt.Errorf("syslog: RFC 3164 ProcID must not contain ']', '[', or whitespace")
+	}
+	return nil
+}
+
+// ValidateAppNameRFC3164 reports whether s is a valid RFC 3164 §4.1.3 TAG:
+// required (no NILVALUE), 1-32 octets, ABNF alphanumeric only ([A-Za-z0-9]).
+// A non-alphanumeric character would terminate the TAG and start CONTENT
+// on a conformant receiver, so it's rejected here at format time.
+func ValidateAppNameRFC3164(s string) error {
+	if s == "" {
+		return fmt.Errorf("syslog: RFC 3164 TAG (AppName) is required")
+	}
+	if len(s) > rfc3164TagMax {
+		return fmt.Errorf("syslog: RFC 3164 TAG exceeds %d octets", rfc3164TagMax)
+	}
+	for i := 0; i < len(s); i++ {
+		if c := s[i]; !isAlphaNum(c) {
+			return fmt.Errorf("syslog: RFC 3164 TAG must be alphanumeric (got %q)", c)
+		}
+	}
+	return nil
 }

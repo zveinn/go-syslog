@@ -51,6 +51,16 @@ f.AddLog(msg2)
 conn.Write(f.Bytes())
 ```
 
+Validate a message without formatting it. Useful for input forms, API request validation, or anywhere you want to check a `Message` before committing to encoding it:
+
+```go
+if err := syslog.ValidateMessageRFC5424(m); err != nil {
+    return fmt.Errorf("invalid syslog message: %w", err)
+}
+```
+
+There are per-field validators too (`ValidateHostnameRFC5424`, `ValidateAppNameRFC3164`, `ValidateSDID`, ...) and an RFC 3164 variant `ValidateMessageRFC3164`.
+
 Format and frame in one call. The framer formats directly into its own buffer so the caller does not need a scratch slice:
 
 ```go
@@ -82,6 +92,17 @@ The same methods exist on `FrameRFC6587NonTransparent`, and there are `AddLogRFC
 BenchmarkNewPriority                                  0.47 ns/op     0 B/op  0 allocs/op
 BenchmarkPriority_Facility                            0.54 ns/op     0 B/op  0 allocs/op
 BenchmarkPriority_Severity                            0.55 ns/op     0 B/op  0 allocs/op
+BenchmarkValidateHostnameRFC3164                       24 ns/op     0 B/op  0 allocs/op
+BenchmarkValidateAppNameRFC3164                       5.2 ns/op     0 B/op  0 allocs/op
+BenchmarkValidateProcIDRFC3164                         33 ns/op     0 B/op  0 allocs/op
+BenchmarkValidateHostnameRFC5424                       14 ns/op     0 B/op  0 allocs/op
+BenchmarkValidateAppNameRFC5424                       8.1 ns/op     0 B/op  0 allocs/op
+BenchmarkValidateProcIDRFC5424                        4.6 ns/op     0 B/op  0 allocs/op
+BenchmarkValidateMsgIDRFC5424                         4.3 ns/op     0 B/op  0 allocs/op
+BenchmarkValidateSDID                                  13 ns/op     0 B/op  0 allocs/op
+BenchmarkValidateStructuredData                       100 ns/op     0 B/op  0 allocs/op
+BenchmarkValidateMessageRFC3164                        15 ns/op     0 B/op  0 allocs/op
+BenchmarkValidateMessageRFC5424                       136 ns/op     0 B/op  0 allocs/op
 BenchmarkAppendRFC3164                                  93 ns/op     0 B/op  0 allocs/op
 BenchmarkAppendRFC5424                                 337 ns/op     0 B/op  0 allocs/op
 BenchmarkFormatRFC3164                                 133 ns/op   112 B/op  1 allocs/op
