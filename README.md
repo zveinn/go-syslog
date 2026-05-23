@@ -89,42 +89,47 @@ The same methods exist on `FrameRFC6587NonTransparent`, and there are `AddLogRFC
 ## Performance
 
 ```
-BenchmarkNewPriority                                  0.47 ns/op     0 B/op  0 allocs/op
-BenchmarkPriority_Facility                            0.54 ns/op     0 B/op  0 allocs/op
-BenchmarkPriority_Severity                            0.55 ns/op     0 B/op  0 allocs/op
-BenchmarkValidateHostnameRFC3164                       24 ns/op     0 B/op  0 allocs/op
-BenchmarkValidateAppNameRFC3164                       5.2 ns/op     0 B/op  0 allocs/op
-BenchmarkValidateProcIDRFC3164                         33 ns/op     0 B/op  0 allocs/op
-BenchmarkValidateHostnameRFC5424                       14 ns/op     0 B/op  0 allocs/op
-BenchmarkValidateAppNameRFC5424                       8.1 ns/op     0 B/op  0 allocs/op
-BenchmarkValidateProcIDRFC5424                        4.6 ns/op     0 B/op  0 allocs/op
-BenchmarkValidateMsgIDRFC5424                         4.3 ns/op     0 B/op  0 allocs/op
-BenchmarkValidateSDID                                  13 ns/op     0 B/op  0 allocs/op
-BenchmarkValidateStructuredData                       100 ns/op     0 B/op  0 allocs/op
-BenchmarkValidateMessageRFC3164                        15 ns/op     0 B/op  0 allocs/op
-BenchmarkValidateMessageRFC5424                       136 ns/op     0 B/op  0 allocs/op
-BenchmarkAppendRFC3164                                  93 ns/op     0 B/op  0 allocs/op
-BenchmarkAppendRFC5424                                 337 ns/op     0 B/op  0 allocs/op
-BenchmarkFormatRFC3164                                 133 ns/op   112 B/op  1 allocs/op
-BenchmarkFormatRFC5424                                 437 ns/op   224 B/op  1 allocs/op
-BenchmarkNewFrameRFC6587                                21 ns/op    24 B/op  1 allocs/op
-BenchmarkFrameRFC6587_AddLog                          11.2 ns/op     0 B/op  0 allocs/op
-BenchmarkFrameRFC6587_Size                            0.55 ns/op     0 B/op  0 allocs/op
-BenchmarkFrameRFC6587_Bytes                            1.1 ns/op     0 B/op  0 allocs/op
-BenchmarkFrameRFC6587_Reset                           0.82 ns/op     0 B/op  0 allocs/op
-BenchmarkNewFrameRFC6587NonTransparent                  22 ns/op    32 B/op  1 allocs/op
-BenchmarkFrameRFC6587NonTransparent_AddLog             9.9 ns/op     0 B/op  0 allocs/op
-BenchmarkFrameRFC6587NonTransparent_Size              0.54 ns/op     0 B/op  0 allocs/op
-BenchmarkFrameRFC6587NonTransparent_Bytes              1.1 ns/op     0 B/op  0 allocs/op
-BenchmarkFrameRFC6587NonTransparent_Reset             0.54 ns/op     0 B/op  0 allocs/op
-BenchmarkPipelineRFC3164_Octet                         108 ns/op     0 B/op  0 allocs/op
-BenchmarkFrameRFC6587_AddLogRFC3164                    106 ns/op     0 B/op  0 allocs/op
-BenchmarkPipelineRFC3164_NonTransp                     103 ns/op     0 B/op  0 allocs/op
-BenchmarkFrameRFC6587NonTransparent_AddLogRFC3164      102 ns/op     0 B/op  0 allocs/op
-BenchmarkPipelineRFC5424_Octet                         193 ns/op     0 B/op  0 allocs/op
-BenchmarkFrameRFC6587_AddLogRFC5424                    192 ns/op     0 B/op  0 allocs/op
-BenchmarkPipelineRFC5424_NonTransp                     201 ns/op     0 B/op  0 allocs/op
-BenchmarkFrameRFC6587NonTransparent_AddLogRFC5424      189 ns/op     0 B/op  0 allocs/op
-BenchmarkFrameRFC6587_AddLogsRFC5424                 19822 ns/op     0 B/op  0 allocs/op  (100 msgs, 198 ns/msg)
-BenchmarkFrameRFC6587NonTransparent_AddLogsRFC5424   18197 ns/op     0 B/op  0 allocs/op  (100 msgs, 182 ns/msg)
+$ go test -bench=. -benchmem -run='^$' -benchtime=3s -count=1 ./...
+goos: linux
+goarch: amd64
+pkg: github.com/zveinn/go-syslog
+cpu: AMD Ryzen 7 7840HS w/ Radeon 780M Graphics
+BenchmarkNewPriority-16                                         1000000000               0.6608 ns/op          0 B/op          0 allocs/op
+BenchmarkPriority_Facility-16                                   1000000000               0.5409 ns/op          0 B/op          0 allocs/op
+BenchmarkPriority_Severity-16                                   1000000000               0.5395 ns/op          0 B/op          0 allocs/op
+BenchmarkAppendRFC3164-16                                       37581124                94.48 ns/op            0 B/op          0 allocs/op
+BenchmarkAppendRFC5424-16                                       10086043               353.7 ns/op             0 B/op          0 allocs/op
+BenchmarkFormatRFC3164-16                                       25484018               156.1 ns/op           112 B/op          1 allocs/op
+BenchmarkFormatRFC5424-16                                        6193645               505.0 ns/op           224 B/op          1 allocs/op
+BenchmarkNewFrameRFC6587-16                                     100000000               33.93 ns/op           24 B/op          1 allocs/op
+BenchmarkFrameRFC6587_AddLog-16                                 267571840               11.87 ns/op     6994.14 MB/s           0 B/op          0 allocs/op
+BenchmarkFrameRFC6587_Size-16                                   1000000000               0.5413 ns/op          0 B/op          0 allocs/op
+BenchmarkFrameRFC6587_Bytes-16                                  1000000000               1.067 ns/op           0 B/op          0 allocs/op
+BenchmarkFrameRFC6587_Reset-16                                  1000000000               0.8100 ns/op          0 B/op          0 allocs/op
+BenchmarkNewFrameRFC6587NonTransparent-16                       100000000               34.74 ns/op           32 B/op          1 allocs/op
+BenchmarkFrameRFC6587NonTransparent_AddLog-16                   295441210               10.59 ns/op     7837.12 MB/s           0 B/op          0 allocs/op
+BenchmarkFrameRFC6587NonTransparent_Size-16                     1000000000               0.5455 ns/op          0 B/op          0 allocs/op
+BenchmarkFrameRFC6587NonTransparent_Bytes-16                    1000000000               1.074 ns/op           0 B/op          0 allocs/op
+BenchmarkFrameRFC6587NonTransparent_Reset-16                    1000000000               0.6210 ns/op          0 B/op          0 allocs/op
+BenchmarkPipelineRFC5424_Octet-16                               17588158               203.7 ns/op             0 B/op          0 allocs/op
+BenchmarkPipelineRFC3164_Octet-16                               32542057               108.5 ns/op             0 B/op          0 allocs/op
+BenchmarkFrameRFC6587_AddLogRFC3164-16                          33090034               107.7 ns/op             0 B/op          0 allocs/op
+BenchmarkPipelineRFC3164_NonTransp-16                           33545490               104.4 ns/op             0 B/op          0 allocs/op
+BenchmarkFrameRFC6587NonTransparent_AddLogRFC3164-16            35060760               101.7 ns/op             0 B/op          0 allocs/op
+BenchmarkFrameRFC6587_AddLogRFC5424-16                          17885848               199.2 ns/op             0 B/op          0 allocs/op
+BenchmarkPipelineRFC5424_NonTransp-16                           18416469               194.2 ns/op             0 B/op          0 allocs/op
+BenchmarkFrameRFC6587NonTransparent_AddLogRFC5424-16            18571788               192.0 ns/op             0 B/op          0 allocs/op
+BenchmarkValidateHostnameRFC3164-16                             152204276               23.74 ns/op            0 B/op          0 allocs/op
+BenchmarkValidateProcIDRFC3164-16                               100000000               33.31 ns/op            0 B/op          0 allocs/op
+BenchmarkValidateAppNameRFC3164-16                              666640089                5.425 ns/op           0 B/op          0 allocs/op
+BenchmarkValidateHostnameRFC5424-16                             258467637               13.94 ns/op            0 B/op          0 allocs/op
+BenchmarkValidateAppNameRFC5424-16                              433289787                8.315 ns/op           0 B/op          0 allocs/op
+BenchmarkValidateProcIDRFC5424-16                               835405143                4.293 ns/op           0 B/op          0 allocs/op
+BenchmarkValidateMsgIDRFC5424-16                                789726434                4.554 ns/op           0 B/op          0 allocs/op
+BenchmarkValidateSDID-16                                        176882556               20.38 ns/op            0 B/op          0 allocs/op
+BenchmarkValidateStructuredData-16                              35011795               107.0 ns/op             0 B/op          0 allocs/op
+BenchmarkValidateMessageRFC3164-16                              233203078               15.72 ns/op            0 B/op          0 allocs/op
+BenchmarkValidateMessageRFC5424-16                              27455179               133.4 ns/op             0 B/op          0 allocs/op
+BenchmarkFrameRFC6587_AddLogsRFC5424-16                           182808             19792 ns/op              28 B/op          0 allocs/op
+BenchmarkFrameRFC6587NonTransparent_AddLogsRFC5424-16             186752             19240 ns/op              28 B/op          0 allocs/op
 ```
