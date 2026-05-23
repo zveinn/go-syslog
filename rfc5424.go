@@ -136,9 +136,12 @@ func ValidateMsgIDRFC5424(s string) error {
 }
 
 // ValidateSDID reports whether s is a valid RFC 5424 §6.3.2 SD-ID:
-// 1-32 SD-NAME octets (PRINTUSASCII excluding '=', SP, ']', '"').
+// 1-32 SD-NAME octets (PRINTUSASCII excluding '=', SP, ']', '"'). When s
+// contains '@' it is treated as a private-enterprise ID and validated as
+// name@<enterprise number> per the §6.3.2 RECOMMENDED form — both halves
+// must be valid SD-NAMEs and the whole string must stay ≤32 octets.
 func ValidateSDID(s string) error {
-	return validateSDName(s, "SD-ID")
+	return validateSDID(s)
 }
 
 // ValidateParamName reports whether s is a valid RFC 5424 §6.3.3
@@ -185,7 +188,7 @@ func validateSDList(elems []SDElement) error {
 		seenIDs = make(map[string]struct{}, len(elems))
 	}
 	for _, e := range elems {
-		if err := validateSDName(e.ID, "SD-ID"); err != nil {
+		if err := validateSDID(e.ID); err != nil {
 			return err
 		}
 		if seenIDs != nil {
@@ -253,6 +256,29 @@ func validateSDName(name, kind string) error {
 		}
 	}
 	return nil
+}
+
+// validateSDID enforces RFC 5424 §6.3.2 SD-ID format. If the ID contains
+// '@' it is a private enterprise ID; both the name part and the enterprise
+// number must each conform to SD-NAME rules. IANA-registered IDs (no '@')
+// are validated as a plain SD-NAME.
+func validateSDID(id string) error {
+	if idx := strings.IndexByte(id, '@'); idx >= 0 {
+		if strings.IndexByte(id[idx+1:], '@') >= 0 {
+			return fmt.Errorf("syslog: SD-ID contains multiple '@' signs")
+		}
+		if len(id) > 32 {
+			return fmt.Errorf("syslog: SD-ID exceeds 32 octets")
+		}
+		if err := validateSDName(id[:idx], "SD-ID (name part)"); err != nil {
+			return err
+		}
+		if err := validateSDName(id[idx+1:], "SD-ID (enterprise number)"); err != nil {
+			return err
+		}
+		return nil
+	}
+	return validateSDName(id, "SD-ID")
 }
 
 // sdEscapeLUT[c] != 0 iff c must be escaped per RFC 5424 §6.3.3.

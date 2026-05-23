@@ -295,6 +295,17 @@ func TestFormatRFC5424_RejectsBadInput(t *testing.T) {
 		{"SD-ID with ]", func(m *Message) {
 			m.StructuredData = []SDElement{{ID: "a]b"}}
 		}},
+		// §6.3.2 RECOMMENDED form name@<enterprise number> — enforced here as MUST.
+		// The "bad id" case above already covers SP-in-SD-NAME rejection.
+		{"SD-ID @ with empty name", func(m *Message) {
+			m.StructuredData = []SDElement{{ID: "@32473"}}
+		}},
+		{"SD-ID @ with empty number", func(m *Message) {
+			m.StructuredData = []SDElement{{ID: "name@"}}
+		}},
+		{"SD-ID with multiple @", func(m *Message) {
+			m.StructuredData = []SDElement{{ID: "a@b@1"}}
+		}},
 		{"duplicate SD-ID", func(m *Message) {
 			m.StructuredData = []SDElement{{ID: "x@1"}, {ID: "x@1"}}
 		}},
@@ -1353,6 +1364,17 @@ func TestValidateSDID(t *testing.T) {
 		{"with-bracket", "a]b", true},  // §6.3.3: excluded
 		{"with-quote", `a"b`, true},    // §6.3.3: excluded
 		{"high-bit", "a\x80b", true},
+		// §6.3.2 RECOMMENDED form: name@<enterprise number>. Enforced here as MUST.
+		{"at-empty-name", "@32473", true},
+		{"at-empty-number", "name@", true},
+		{"at-multiple", "a@b@1", true},
+		{"at-over-32-total", strings.Repeat("a", 31) + "@1", true}, // 33 chars
+		{"at-at-32-total", strings.Repeat("a", 30) + "@1", false},  // 32 chars exactly
+		// "@0" is a common placeholder for anonymous / unregistered senders
+		// (no assigned Private Enterprise Number). RFC 5424 §6.3.2 says the
+		// part after '@' "is not further specified", so any SD-NAME-shaped
+		// token, including "0", must be accepted.
+		{"at-pen-zero", "name@0", false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
