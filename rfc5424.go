@@ -136,9 +136,12 @@ func ValidateMsgIDRFC5424(s string) error {
 }
 
 // ValidateSDID reports whether s is a valid RFC 5424 §6.3.2 SD-ID:
-// 1-32 SD-NAME octets (PRINTUSASCII excluding '=', SP, ']', '"').
+// 1-32 SD-NAME octets (PRINTUSASCII excluding '=', SP, ']', '"'). When s
+// contains '@' it is treated as a private-enterprise ID and validated as
+// name@<enterprise number> per the §6.3.2 RECOMMENDED form — both halves
+// must be valid SD-NAMEs and the whole string must stay ≤32 octets.
 func ValidateSDID(s string) error {
-	return validateSDName(s, "SD-ID")
+	return validateSDID(s)
 }
 
 // ValidateParamName reports whether s is a valid RFC 5424 §6.3.3
